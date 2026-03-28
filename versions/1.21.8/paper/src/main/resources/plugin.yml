@@ -1,0 +1,14 @@
+name: ${mod_name}
+main: dev.nexbit.bitcam.paper.BitCamPaperPlugin
+version: ${version}
+api-version: "${paper_api_version}"
+description: ${mod_description}
+commands:
+  bitcam:
+    description: BitCam server debug commands
+    usage: /bitcam debug [clients]
+    permission: bitcam.admin
+permissions:
+  bitcam.admin:
+    description: Allows using BitCam server debug commands
+    default: op

@@ -1,0 +1,25 @@
+{
+  "schemaVersion": 1,
+  "id": "${mod_id}",
+  "version": "${version}",
+  "name": "${mod_name}",
+  "description": "${mod_description}",
+  "license": "${mod_license}",
+  "environment": "*",
+  "entrypoints": {
+    "main": [
+      "dev.nexbit.bitcam.fabric.BitCamFabricMod"
+    ],
+    "client": [
+      "dev.nexbit.bitcam.fabric.client.BitCamFabricClient"
+    ],
+    "fabric-datagen": [
+      "dev.nexbit.bitcam.fabric.client.BitCamFabricDataGenerator"
+    ]
+  },
+  "depends": {
+    "fabricloader": ">=${fabric_loader_version}",
+    "fabric-api": "*",
+    "minecraft": "${minecraft_version}"
+  }
+}
