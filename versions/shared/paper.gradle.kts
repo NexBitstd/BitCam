@@ -97,3 +97,13 @@ tasks.named<Jar>("sourcesJar") {
     from(protocolMain.allSource)
     from(serverCommonMain.allSource)
 }
+
+val outputDir = rootProject.layout.buildDirectory.dir("libs/paper")
+
+tasks.named<Jar>("jar") {
+    destinationDirectory.set(outputDir)
+}
+
+tasks.named<Jar>("sourcesJar") {
+    destinationDirectory.set(outputDir)
+}

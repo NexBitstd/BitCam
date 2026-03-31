@@ -14,6 +14,10 @@ public final class LocalPreviewStore {
         );
     }
 
+    public void accept(LocalPreviewFrame frame) {
+        this.frame = frame;
+    }
+
     public LocalPreviewFrame frame() {
         return this.frame;
     }

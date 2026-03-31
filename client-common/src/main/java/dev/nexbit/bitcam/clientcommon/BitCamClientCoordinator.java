@@ -4,6 +4,7 @@ import dev.nexbit.bitcam.common.PlatformAccess;
 import dev.nexbit.bitcam.protocol.BitCamProtocol;
 import dev.nexbit.bitcam.protocol.signal.ClientHelloSignalPacket;
 import dev.nexbit.bitcam.protocol.signal.ServerWelcomeSignalPacket;
+import dev.nexbit.bitcam.protocol.signal.BitCamStreamQualityProfile;
 import dev.nexbit.bitcam.protocol.udp.BitCamBubbleStyle;
 import java.util.List;
 import java.util.UUID;
@@ -13,6 +14,7 @@ public final class BitCamClientCoordinator implements AutoCloseable {
     private final PlatformAccess platform;
     private final Supplier<UUID> playerIdSupplier;
     private final BitCamClientConfig config;
+    private final BitCamHelloRequester helloRequester;
     private final RemoteFrameStore frameStore = new RemoteFrameStore();
     private final LocalPreviewStore previewStore = new LocalPreviewStore();
     private final CameraCaptureController cameraCapture = new CameraCaptureController();
@@ -21,15 +23,18 @@ public final class BitCamClientCoordinator implements AutoCloseable {
     private String lastCameraErrorMessage = "";
     private boolean streamingEnabled;
     private ServerWelcomeSignalPacket welcome;
+    private List<BitCamStreamQualityProfile> availableQualityProfiles = List.of();
+    private String selectedQualityProfileId = "";
 
-    public BitCamClientCoordinator(PlatformAccess platform, Supplier<UUID> playerIdSupplier) {
+    public BitCamClientCoordinator(PlatformAccess platform, Supplier<UUID> playerIdSupplier, BitCamHelloRequester helloRequester) {
         this.platform = platform;
         this.playerIdSupplier = playerIdSupplier;
+        this.helloRequester = helloRequester;
         this.config = BitCamClientConfig.load(platform.configDirectory());
     }
 
     public ClientHelloSignalPacket createHelloPacket() {
-        return new ClientHelloSignalPacket(BitCamProtocol.PROTOCOL_VERSION);
+        return new ClientHelloSignalPacket(BitCamProtocol.PROTOCOL_VERSION, this.config.preferredQualityProfileId());
     }
 
     public void handleWelcome(ServerWelcomeSignalPacket welcome) {
@@ -40,7 +45,11 @@ public final class BitCamClientCoordinator implements AutoCloseable {
             return;
         }
 
+        boolean firstWelcome = this.welcome == null;
+        boolean shouldRestartStreaming = this.streamingEnabled;
         this.welcome = welcome;
+        this.availableQualityProfiles = welcome.availableQualityProfiles();
+        this.selectedQualityProfileId = welcome.selectedQualityProfileId();
         if (this.udpClient != null) {
             this.udpClient.close();
         }
@@ -49,7 +58,7 @@ public final class BitCamClientCoordinator implements AutoCloseable {
         this.udpClient.connect(welcome);
         this.platform.logger().info("BitCam client received UDP endpoint " + welcome.udpHost() + ":" + welcome.udpPort() + " and is waiting for session acceptance");
 
-        if (this.hasCameraSelection()) {
+        if ((shouldRestartStreaming || firstWelcome) && this.hasCameraSelection()) {
             this.startStreaming();
         }
     }
@@ -66,6 +75,14 @@ public final class BitCamClientCoordinator implements AutoCloseable {
 
     public boolean streamingEnabled() {
         return this.streamingEnabled;
+    }
+
+    public boolean remotePreviewEnabled() {
+        return this.config.remotePreviewEnabled();
+    }
+
+    public void toggleRemotePreview() {
+        this.config.remotePreviewEnabled(!this.config.remotePreviewEnabled());
     }
 
     public boolean hasWelcome() {
@@ -90,6 +107,22 @@ public final class BitCamClientCoordinator implements AutoCloseable {
 
     public BitCamBubbleStyle bubbleStyle() {
         return this.config.bubbleStyle();
+    }
+
+    public List<BitCamStreamQualityProfile> availableQualityProfiles() {
+        return this.availableQualityProfiles;
+    }
+
+    public String selectedQualityProfileId() {
+        return this.selectedQualityProfileId.isBlank() ? this.config.preferredQualityProfileId() : this.selectedQualityProfileId;
+    }
+
+    public void selectQualityProfile(String qualityProfileId) {
+        String normalized = qualityProfileId == null ? "" : qualityProfileId.trim();
+        this.config.preferredQualityProfileId(normalized);
+        if (this.welcome != null && this.helloRequester != null) {
+            this.helloRequester.requestHello();
+        }
     }
 
     public boolean needsInitialSetup() {
@@ -208,6 +241,8 @@ public final class BitCamClientCoordinator implements AutoCloseable {
     public void close() {
         this.cameraCapture.close();
         this.previewStore.clear();
+        this.availableQualityProfiles = List.of();
+        this.selectedQualityProfileId = "";
         if (this.udpClient != null) {
             this.udpClient.close();
         }

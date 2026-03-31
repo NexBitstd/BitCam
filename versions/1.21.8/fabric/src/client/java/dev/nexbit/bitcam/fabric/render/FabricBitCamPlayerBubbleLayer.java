@@ -1,6 +1,7 @@
 package dev.nexbit.bitcam.fabric.render;
 
 import com.mojang.blaze3d.vertex.PoseStack;
+import dev.nexbit.bitcam.client.render.BitCamBillboardRenderer;
 import net.minecraft.client.model.PlayerModel;
 import net.minecraft.client.renderer.MultiBufferSource;
 import net.minecraft.client.renderer.entity.RenderLayerParent;
@@ -27,6 +28,17 @@ public final class FabricBitCamPlayerBubbleLayer extends RenderLayer<PlayerRende
         float limbSwing,
         float limbSwingAmount
     ) {
-        this.renderer.renderPlayerLayer(poseStack, multiBufferSource, packedLight, renderState);
+        net.minecraft.world.entity.Entity entity = net.minecraft.client.Minecraft.getInstance().level == null
+            ? null
+            : net.minecraft.client.Minecraft.getInstance().level.getEntity(renderState.id);
+        if (!(entity instanceof net.minecraft.client.player.AbstractClientPlayer player)) {
+            return;
+        }
+        this.renderer.renderPlayerBubble(
+            poseStack, player,
+            (float) renderState.boundingBoxHeight,
+            renderState.bodyRot, renderState.yRot, renderState.xRot,
+            this.getParentModel().head
+        );
     }
 }

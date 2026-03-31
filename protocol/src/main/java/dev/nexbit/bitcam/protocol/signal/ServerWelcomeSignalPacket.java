@@ -1,5 +1,6 @@
 package dev.nexbit.bitcam.protocol.signal;
 
+import java.util.List;
 import java.util.UUID;
 
 public record ServerWelcomeSignalPacket(
@@ -13,8 +14,15 @@ public record ServerWelcomeSignalPacket(
     int height,
     int fps,
     float quality,
+    String selectedQualityProfileId,
+    List<BitCamStreamQualityProfile> availableQualityProfiles,
     int radius
 ) implements BitCamSignalPacket {
+    public ServerWelcomeSignalPacket {
+        selectedQualityProfileId = selectedQualityProfileId == null ? "" : selectedQualityProfileId.trim();
+        availableQualityProfiles = availableQualityProfiles == null ? List.of() : List.copyOf(availableQualityProfiles);
+    }
+
     @Override
     public BitCamSignalPacketType type() {
         return BitCamSignalPacketType.SERVER_WELCOME;

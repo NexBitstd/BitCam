@@ -1,9 +1,11 @@
 package dev.nexbit.bitcam.servercommon;
 
+import dev.nexbit.bitcam.common.BitCamPlayerPermissionChecker;
 import dev.nexbit.bitcam.common.PlatformAccess;
 import dev.nexbit.bitcam.protocol.BitCamProtocol;
 import dev.nexbit.bitcam.protocol.signal.ClientHelloSignalPacket;
 import dev.nexbit.bitcam.protocol.signal.ServerWelcomeSignalPacket;
+import dev.nexbit.bitcam.protocol.signal.BitCamStreamQualityProfile;
 import dev.nexbit.bitcam.protocol.udp.VideoFrameUdpPacket;
 import java.security.SecureRandom;
 import java.util.Arrays;
@@ -20,16 +22,18 @@ public final class BitCamServerCoordinator implements AutoCloseable {
     private final PlatformAccess platform;
     private final BitCamServerConfig config;
     private final BitCamViewerResolver viewerResolver;
+    private final BitCamPlayerPermissionChecker permissionChecker;
     private final SecureRandom random = new SecureRandom();
     private final Map<UUID, BitCamSession> sessionsByPlayer = new ConcurrentHashMap<>();
     private final Map<UUID, BitCamSession> sessionsById = new ConcurrentHashMap<>();
     private final Map<UUID, BitCamStreamState> streamsByPlayer = new ConcurrentHashMap<>();
     private final BitCamUdpServer udpServer;
 
-    public BitCamServerCoordinator(PlatformAccess platform, BitCamViewerResolver viewerResolver) {
+    public BitCamServerCoordinator(PlatformAccess platform, BitCamViewerResolver viewerResolver, BitCamPlayerPermissionChecker permissionChecker) {
         this.platform = platform;
         this.config = BitCamServerConfig.load(platform.configDirectory());
         this.viewerResolver = viewerResolver;
+        this.permissionChecker = permissionChecker;
         this.udpServer = new BitCamUdpServer(platform, this.config, this);
     }
 
@@ -54,6 +58,8 @@ public final class BitCamServerCoordinator implements AutoCloseable {
 
         byte[] secret = new byte[BitCamProtocol.SECRET_LENGTH];
         this.random.nextBytes(secret);
+        List<BitCamStreamQualityProfile> allowedProfiles = this.allowedProfilesFor(playerId);
+        BitCamStreamQualityProfile selectedProfile = this.selectProfileFor(playerId, hello.requestedQualityProfileId(), allowedProfiles);
 
         BitCamSession session = new BitCamSession(playerId, UUID.randomUUID(), secret, true, true);
         this.sessionsByPlayer.put(playerId, session);
@@ -66,10 +72,12 @@ public final class BitCamServerCoordinator implements AutoCloseable {
             session.sessionId(),
             session.secret(),
             this.config.mtu(),
-            this.config.width(),
-            this.config.height(),
-            this.config.fps(),
-            this.config.quality(),
+            selectedProfile.width(),
+            selectedProfile.height(),
+            selectedProfile.fps(),
+            selectedProfile.quality(),
+            selectedProfile.id(),
+            allowedProfiles,
             this.config.radius()
         ));
     }
@@ -180,6 +188,33 @@ public final class BitCamServerCoordinator implements AutoCloseable {
 
     boolean validateSecret(BitCamSession session, byte[] secret) {
         return Arrays.equals(session.secret(), secret);
+    }
+
+    private List<BitCamStreamQualityProfile> allowedProfilesFor(UUID playerId) {
+        List<BitCamStreamQualityProfile> profiles = this.config.qualityPresets().stream()
+            .filter(preset -> this.permissionChecker == null || this.permissionChecker.hasPermission(playerId, preset.permissionExpression()))
+            .map(BitCamServerQualityPreset::profile)
+            .toList();
+        return profiles.isEmpty() ? List.of(this.config.defaultQualityProfile()) : profiles;
+    }
+
+    private BitCamStreamQualityProfile selectProfileFor(UUID playerId, String requestedProfileId, List<BitCamStreamQualityProfile> allowedProfiles) {
+        String requestedId = requestedProfileId == null ? "" : requestedProfileId.trim();
+        if (!requestedId.isBlank()) {
+            for (BitCamStreamQualityProfile profile : allowedProfiles) {
+                if (profile.id().equalsIgnoreCase(requestedId)) {
+                    return profile;
+                }
+            }
+        }
+
+        for (BitCamStreamQualityProfile profile : allowedProfiles) {
+            if (profile.id().equals(this.config.defaultQualityPresetId())) {
+                return profile;
+            }
+        }
+
+        return allowedProfiles.isEmpty() ? this.config.defaultQualityProfile() : allowedProfiles.getFirst();
     }
 
     @Override

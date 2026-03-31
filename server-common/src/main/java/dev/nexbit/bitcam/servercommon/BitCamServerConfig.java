@@ -1,70 +1,172 @@
 package dev.nexbit.bitcam.servercommon;
 
+import com.electronwill.nightconfig.core.CommentedConfig;
+import com.electronwill.nightconfig.core.file.CommentedFileConfig;
+import dev.nexbit.bitcam.protocol.signal.BitCamStreamQualityProfile;
 import java.io.IOException;
-import java.io.InputStream;
-import java.io.OutputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.util.Properties;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Locale;
 
 public record BitCamServerConfig(
     String udpHost,
     int udpPort,
     int radius,
-    int width,
-    int height,
-    int fps,
-    float quality,
+    List<BitCamServerQualityPreset> qualityPresets,
+    String defaultQualityPresetId,
     int mtu
 ) {
-    private static final String FILE_NAME = "bitcam-server.properties";
+    private static final String FILE_NAME = "bitcam-server.toml";
+
+    public BitCamServerConfig {
+        udpHost = udpHost == null || udpHost.isBlank() ? "127.0.0.1" : udpHost.trim();
+        udpPort = Math.max(1, udpPort);
+        radius = Math.max(1, radius);
+        qualityPresets = qualityPresets == null || qualityPresets.isEmpty() ? defaultPresets() : List.copyOf(qualityPresets);
+        defaultQualityPresetId = normalizeDefaultQualityPresetId(defaultQualityPresetId, qualityPresets);
+        mtu = Math.max(512, mtu);
+    }
 
     public static BitCamServerConfig load(Path configDirectory) {
         try {
             Files.createDirectories(configDirectory);
             Path file = configDirectory.resolve(FILE_NAME);
+            boolean fileExists = Files.exists(file);
 
-            Properties properties = new Properties();
-            if (Files.exists(file)) {
-                try (InputStream input = Files.newInputStream(file)) {
-                    properties.load(input);
+            if (!fileExists) {
+                BitCamServerConfig defaults = new BitCamServerConfig("127.0.0.1", 35475, 24, defaultPresets(), "sd", 1200);
+                defaults.save(file);
+                return defaults;
+            }
+
+            try (CommentedFileConfig config = CommentedFileConfig.builder(file).build()) {
+                config.load();
+
+                String udpHost = config.getOrElse("network.udp_host", "127.0.0.1");
+                int udpPort = config.getIntOrElse("network.udp_port", 35475);
+                int radius = config.getIntOrElse("stream.radius", 24);
+                int mtu = config.getIntOrElse("stream.mtu", 1200);
+                String defaultQualityPresetId = config.getOrElse("stream.default_quality", "standard");
+                List<BitCamServerQualityPreset> presets = readQualityPresets(config);
+
+                if (presets.isEmpty()) {
+                    presets = defaultPresets();
                 }
+
+                return new BitCamServerConfig(udpHost, udpPort, radius, presets, defaultQualityPresetId, mtu);
             }
-
-            BitCamServerConfig config = new BitCamServerConfig(
-                properties.getProperty("udp.host", "127.0.0.1"),
-                Integer.parseInt(properties.getProperty("udp.port", "35475")),
-                Integer.parseInt(properties.getProperty("stream.radius", "24")),
-                Integer.parseInt(properties.getProperty("frame.width", "320")),
-                Integer.parseInt(properties.getProperty("frame.height", "180")),
-                Integer.parseInt(properties.getProperty("frame.fps", "15")),
-                Float.parseFloat(properties.getProperty("frame.quality", "0.92")),
-                Integer.parseInt(properties.getProperty("frame.mtu", "1200"))
-            );
-
-            if (!Files.exists(file)) {
-                config.save(file);
-            }
-
-            return config;
         } catch (IOException exception) {
             throw new IllegalStateException("Failed to load BitCam server config", exception);
         }
     }
 
-    public void save(Path file) throws IOException {
-        Properties properties = new Properties();
-        properties.setProperty("udp.host", this.udpHost);
-        properties.setProperty("udp.port", Integer.toString(this.udpPort));
-        properties.setProperty("stream.radius", Integer.toString(this.radius));
-        properties.setProperty("frame.width", Integer.toString(this.width));
-        properties.setProperty("frame.height", Integer.toString(this.height));
-        properties.setProperty("frame.fps", Integer.toString(this.fps));
-        properties.setProperty("frame.quality", Float.toString(this.quality));
-        properties.setProperty("frame.mtu", Integer.toString(this.mtu));
+    public BitCamStreamQualityProfile defaultQualityProfile() {
+        return this.qualityPresets.stream()
+            .map(BitCamServerQualityPreset::profile)
+            .filter(profile -> profile.id().equals(this.defaultQualityPresetId))
+            .findFirst()
+            .orElseGet(() -> this.qualityPresets.getFirst().profile());
+    }
 
-        try (OutputStream output = Files.newOutputStream(file)) {
-            properties.store(output, "BitCam server media settings");
+    public int width() { return this.defaultQualityProfile().width(); }
+    public int height() { return this.defaultQualityProfile().height(); }
+    public int fps() { return this.defaultQualityProfile().fps(); }
+    public float quality() { return this.defaultQualityProfile().quality(); }
+
+    public void save(Path file) throws IOException {
+        try (CommentedFileConfig config = CommentedFileConfig.builder(file).build()) {
+            config.setComment("network", " Network settings");
+            config.set("network.udp_host", this.udpHost);
+            config.set("network.udp_port", this.udpPort);
+
+            config.setComment("stream", " Stream settings");
+            config.set("stream.radius", this.radius);
+            config.set("stream.mtu", this.mtu);
+            config.set("stream.default_quality", this.defaultQualityPresetId);
+
+            List<CommentedConfig> presetConfigs = new ArrayList<>();
+            for (BitCamServerQualityPreset preset : this.qualityPresets) {
+                CommentedConfig entry = config.createSubConfig();
+                entry.set("id", preset.profile().id());
+                entry.set("name", preset.profile().displayName());
+                entry.set("width", preset.profile().width());
+                entry.set("height", preset.profile().height());
+                entry.set("fps", preset.profile().fps());
+                entry.set("quality", (double) preset.profile().quality());
+                entry.set("permission", preset.permissionExpression());
+                presetConfigs.add(entry);
+            }
+            config.set("quality_preset", presetConfigs);
+
+            config.save();
         }
+    }
+
+    private static List<BitCamServerQualityPreset> readQualityPresets(CommentedFileConfig config) {
+        List<CommentedConfig> presetEntries = config.getOrElse("quality_preset", List.of());
+        if (presetEntries.isEmpty()) {
+            return List.of();
+        }
+
+        List<BitCamServerQualityPreset> presets = new ArrayList<>();
+        for (CommentedConfig entry : presetEntries) {
+            String id = normalizeId(entry.getOrElse("id", ""));
+            if (id.isEmpty()) {
+                continue;
+            }
+            presets.add(new BitCamServerQualityPreset(
+                new BitCamStreamQualityProfile(
+                    id,
+                    entry.getOrElse("name", prettifyName(id)),
+                    entry.getIntOrElse("width", 320),
+                    entry.getIntOrElse("height", 180),
+                    entry.getIntOrElse("fps", 15),
+                    ((Number) entry.getOrElse("quality", 0.92)).floatValue()
+                ),
+                entry.getOrElse("permission", "")
+            ));
+        }
+        return List.copyOf(presets);
+    }
+
+    private static List<BitCamServerQualityPreset> defaultPresets() {
+        return List.of(
+            new BitCamServerQualityPreset(new BitCamStreamQualityProfile("sd", "SD", 320, 180, 15, 0.85F), ""),
+            new BitCamServerQualityPreset(new BitCamStreamQualityProfile("hd", "HD", 640, 360, 20, 0.92F), ""),
+            new BitCamServerQualityPreset(new BitCamStreamQualityProfile("fhd", "FHD", 1280, 720, 24, 0.96F), "op:2")
+        );
+    }
+
+    private static String normalizeDefaultQualityPresetId(String defaultQualityPresetId, List<BitCamServerQualityPreset> presets) {
+        String normalized = normalizeId(defaultQualityPresetId);
+        for (BitCamServerQualityPreset preset : presets) {
+            if (preset.profile().id().equals(normalized)) {
+                return normalized;
+            }
+        }
+        for (BitCamServerQualityPreset preset : presets) {
+            if ("sd".equals(preset.profile().id())) {
+                return preset.profile().id();
+            }
+        }
+        return presets.getFirst().profile().id();
+    }
+
+    private static String normalizeId(String id) {
+        if (id == null || id.isBlank()) {
+            return "standard";
+        }
+        String normalized = id.trim().toLowerCase(Locale.ROOT).replace(' ', '_');
+        return normalized.isEmpty() ? "standard" : normalized;
+    }
+
+    private static String prettifyName(String id) {
+        String normalized = normalizeId(id).replace('_', ' ');
+        if (normalized.isEmpty()) {
+            return "Standard";
+        }
+        return Character.toUpperCase(normalized.charAt(0)) + normalized.substring(1);
     }
 }

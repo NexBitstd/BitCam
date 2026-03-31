@@ -21,6 +21,7 @@ java {
 dependencies {
     api(project(":common"))
     api(project(":protocol"))
+    implementation("com.electronwill.night-config:toml:3.6.7")
 }
 
 tasks.withType<JavaCompile>().configureEach {

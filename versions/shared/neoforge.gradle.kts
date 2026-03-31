@@ -18,6 +18,7 @@ val mcVersion = versionProperty("minecraft_version")
 val neoforgeVersion = versionProperty("neoforge_version")
 val devauthVersion = rootProject.property("devauth_version") as String
 val javacvVersion = rootProject.property("javacv_version") as String
+val ffmpegVersion = rootProject.property("bytedeco_ffmpeg_version") as String
 val modId = rootProject.property("mod_id") as String
 val modName = rootProject.property("mod_name") as String
 val modDescription = rootProject.property("mod_description") as String
@@ -36,6 +37,25 @@ val commonMain = commonSourceSets.named("main").get()
 val protocolMain = protocolSourceSets.named("main").get()
 val clientCommonMain = clientCommonSourceSets.named("main").get()
 val serverCommonMain = serverCommonSourceSets.named("main").get()
+val sharedClientJavaDir = rootProject.file("versions/shared/src/client/java")
+val sharedClientResourcesDir = rootProject.file("versions/shared/src/client/resources")
+val sharedServerJavaDir = rootProject.file("versions/shared/src/server/java")
+val bytedecoDesktopClassifiers = listOf(
+    "windows-x86_64",
+    "linux-x86_64",
+    "linux-arm64",
+    "macosx-x86_64",
+    "macosx-arm64"
+)
+val javaCvRuntimeLibraries = buildList {
+    add("org.bytedeco:javacv:$javacvVersion")
+    add("org.bytedeco:javacpp:$javacvVersion")
+    add("org.bytedeco:ffmpeg:$ffmpegVersion")
+    bytedecoDesktopClassifiers.forEach { classifier ->
+        add("org.bytedeco:javacpp:$javacvVersion:$classifier")
+        add("org.bytedeco:ffmpeg:$ffmpegVersion:$classifier")
+    }
+}
 
 base {
     archivesName.set("${baseArchiveName}-neoforge-${mcVersion}")
@@ -53,6 +73,12 @@ repositories {
 java {
     toolchain.languageVersion = JavaLanguageVersion.of(targetJavaVersion)
     withSourcesJar()
+}
+
+sourceSets.named("main") {
+    java.srcDir(sharedClientJavaDir)
+    java.srcDir(sharedServerJavaDir)
+    resources.srcDir(sharedClientResourcesDir)
 }
 
 neoForge {
@@ -87,11 +113,18 @@ dependencies {
     additionalRuntimeClasspath(serverCommonProject)
     additionalRuntimeClasspath(clientCommonProject)
     additionalRuntimeClasspath("com.github.sarxos:webcam-capture:0.3.12")
-    additionalRuntimeClasspath("org.bytedeco:javacv-platform:$javacvVersion")
+    javaCvRuntimeLibraries.forEach { notation ->
+        additionalRuntimeClasspath(notation)
+    }
 
     implementation("com.github.sarxos:webcam-capture:0.3.12")
     jarJar("com.github.sarxos:webcam-capture:0.3.12")
-    runtimeOnly("org.bytedeco:javacv-platform:$javacvVersion")
+    jarJar("com.electronwill.night-config:toml:3.6.7")
+    jarJar("com.electronwill.night-config:core:3.6.7")
+    javaCvRuntimeLibraries.forEach { notation ->
+        runtimeOnly(notation)
+        jarJar(notation)
+    }
     runtimeOnly("me.djtheredstoner:DevAuth-neoforge:$devauthVersion")
 }
 
@@ -142,6 +175,16 @@ tasks.named<Jar>("sourcesJar") {
     from(protocolMain.allSource)
     from(clientCommonMain.allSource)
     from(serverCommonMain.allSource)
+}
+
+val outputDir = rootProject.layout.buildDirectory.dir("libs/neoforge")
+
+tasks.named<Jar>("jar") {
+    destinationDirectory.set(outputDir)
+}
+
+tasks.named<Jar>("sourcesJar") {
+    destinationDirectory.set(outputDir)
 }
 
 project.afterEvaluate {

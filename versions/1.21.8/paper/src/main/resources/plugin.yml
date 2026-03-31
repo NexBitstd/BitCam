@@ -12,3 +12,6 @@ permissions:
   bitcam.admin:
     description: Allows using BitCam server debug commands
     default: op
+libraries:
+  - com.electronwill.night-config:toml:3.6.7
+  - com.electronwill.night-config:core:3.6.7

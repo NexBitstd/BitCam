@@ -1,6 +1,7 @@
 package dev.nexbit.bitcam.paper;
 
 import dev.nexbit.bitcam.common.BitCamBootstrap;
+import dev.nexbit.bitcam.common.BitCamPermissionExpressions;
 import dev.nexbit.bitcam.paper.platform.PaperPlatformAccess;
 import dev.nexbit.bitcam.protocol.BitCamProtocol;
 import dev.nexbit.bitcam.protocol.signal.BitCamSignalCodec;
@@ -28,7 +29,7 @@ public final class PaperBitCamServerRuntime implements Listener, PluginMessageLi
     public PaperBitCamServerRuntime(BitCamPaperPlugin plugin, String minecraftVersion) {
         this.plugin = plugin;
         this.platform = new PaperPlatformAccess(plugin, minecraftVersion);
-        this.coordinator = new BitCamServerCoordinator(this.platform, this::resolveViewers);
+        this.coordinator = new BitCamServerCoordinator(this.platform, this::resolveViewers, this::hasPermission);
     }
 
     public void initialize() {
@@ -126,6 +127,19 @@ public final class PaperBitCamServerRuntime implements Listener, PluginMessageLi
             sender.sendMessage(ChatColor.GRAY + line);
         }
         return true;
+    }
+
+    private boolean hasPermission(UUID playerId, String permissionExpression) {
+        Player player = Bukkit.getPlayer(playerId);
+        if (player == null) {
+            return false;
+        }
+
+        return BitCamPermissionExpressions.allows(
+            permissionExpression,
+            level -> level <= 0 || player.isOp(),
+            player::hasPermission
+        );
     }
 
     private static byte[] unwrapCustomPayloadBytes(byte[] message) {

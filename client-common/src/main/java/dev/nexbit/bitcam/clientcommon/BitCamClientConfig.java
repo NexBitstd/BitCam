@@ -25,24 +25,30 @@ public final class BitCamClientConfig {
     private final Path file;
     private String preferredCameraName;
     private CameraCaptureMode preferredCaptureMode;
+    private String preferredQualityProfileId;
     private BitCamBubbleStyle bubbleStyle;
     private final Set<UUID> hiddenPlayerIds;
     private boolean setupCompleted;
+    private boolean remotePreviewEnabled;
 
     private BitCamClientConfig(
         Path file,
         String preferredCameraName,
         CameraCaptureMode preferredCaptureMode,
+        String preferredQualityProfileId,
         BitCamBubbleStyle bubbleStyle,
         Set<UUID> hiddenPlayerIds,
-        boolean setupCompleted
+        boolean setupCompleted,
+        boolean remotePreviewEnabled
     ) {
         this.file = file;
         this.preferredCameraName = preferredCameraName;
         this.preferredCaptureMode = preferredCaptureMode;
+        this.preferredQualityProfileId = preferredQualityProfileId == null ? "" : preferredQualityProfileId;
         this.bubbleStyle = bubbleStyle;
         this.hiddenPlayerIds = hiddenPlayerIds;
         this.setupCompleted = setupCompleted;
+        this.remotePreviewEnabled = remotePreviewEnabled;
     }
 
     public static BitCamClientConfig load(Path configDirectory) {
@@ -66,6 +72,7 @@ public final class BitCamClientConfig {
                 file,
                 preferredCameraName,
                 CameraCaptureMode.fromSerialized(properties.getProperty("camera.capture_mode", ""), CameraCaptureMode.AUTO),
+                properties.getProperty("stream.quality_profile", "").trim(),
                 new BitCamBubbleStyle(
                     BitCamBubblePreset.fromSerialized(properties.getProperty("bubble.preset", BitCamBubblePreset.CLASSIC.name())),
                     BitCamBubbleShape.fromSerialized(properties.getProperty("bubble.shape", BitCamBubbleShape.RECTANGLE.name())),
@@ -80,7 +87,8 @@ public final class BitCamClientConfig {
                     readInt(properties, "bubble.content_y_offset_percent", 100)
                 ),
                 readUuidSet(properties.getProperty("players.hidden", "")),
-                readBoolean(properties, "setup.completed", !preferredCameraName.isBlank())
+                readBoolean(properties, "setup.completed", !preferredCameraName.isBlank()),
+                readBoolean(properties, "stream.remote_preview", true)
             );
             if (!Files.exists(file)) {
                 config.save();
@@ -111,6 +119,15 @@ public final class BitCamClientConfig {
 
     public BitCamBubbleStyle bubbleStyle() {
         return this.bubbleStyle;
+    }
+
+    public String preferredQualityProfileId() {
+        return this.preferredQualityProfileId;
+    }
+
+    public void preferredQualityProfileId(String preferredQualityProfileId) {
+        this.preferredQualityProfileId = preferredQualityProfileId == null ? "" : preferredQualityProfileId.trim();
+        this.save();
     }
 
     public void bubbleStyle(BitCamBubbleStyle bubbleStyle) {
@@ -148,11 +165,21 @@ public final class BitCamClientConfig {
         this.save();
     }
 
+    public boolean remotePreviewEnabled() {
+        return this.remotePreviewEnabled;
+    }
+
+    public void remotePreviewEnabled(boolean remotePreviewEnabled) {
+        this.remotePreviewEnabled = remotePreviewEnabled;
+        this.save();
+    }
+
     private void save() {
         try {
             Properties properties = new Properties();
             properties.setProperty("camera.preferred", this.preferredCameraName);
             properties.setProperty("camera.capture_mode", this.preferredCaptureMode.serialized());
+            properties.setProperty("stream.quality_profile", this.preferredQualityProfileId);
             properties.setProperty("bubble.preset", this.bubbleStyle.preset().name());
             properties.setProperty("bubble.shape", this.bubbleStyle.shape().name());
             properties.setProperty("bubble.render_mode", this.bubbleStyle.renderMode().name());
@@ -167,6 +194,7 @@ public final class BitCamClientConfig {
             properties.setProperty("bubble.content_x_offset_percent", Integer.toString(this.bubbleStyle.contentXOffsetPercent()));
             properties.setProperty("bubble.content_y_offset_percent", Integer.toString(this.bubbleStyle.contentYOffsetPercent()));
             properties.setProperty("setup.completed", Boolean.toString(this.setupCompleted));
+            properties.setProperty("stream.remote_preview", Boolean.toString(this.remotePreviewEnabled));
             properties.setProperty(
                 "players.hidden",
                 this.hiddenPlayerIds.stream().map(UUID::toString).collect(Collectors.joining(","))

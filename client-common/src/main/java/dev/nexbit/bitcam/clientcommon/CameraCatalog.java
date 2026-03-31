@@ -101,7 +101,7 @@ public final class CameraCatalog {
     private static CameraBackend selectBackend() {
         List<String> failures = new ArrayList<>();
 
-        for (CameraBackend candidate : candidateBackends()) {
+        for (CameraBackend candidate : candidateBackends(failures)) {
             try {
                 candidate.listDevices();
                 return candidate;
@@ -115,12 +115,29 @@ public final class CameraCatalog {
         return null;
     }
 
-    private static List<CameraBackend> candidateBackends() {
+    private static List<CameraBackend> candidateBackends(List<String> failures) {
+        List<CameraBackend> candidates = new ArrayList<>(2);
         if (isMacOs()) {
-            return List.of(new JavaCvCameraBackend());
+            addBackendCandidate(candidates, failures, "JavaCV/FFmpeg AVFoundation", JavaCvCameraBackend::new);
+            return List.copyOf(candidates);
         }
 
-        return List.of(new WebcamCaptureBackend(), new JavaCvCameraBackend());
+        addBackendCandidate(candidates, failures, "webcam-capture", WebcamCaptureBackend::new);
+        addBackendCandidate(candidates, failures, "JavaCV/FFmpeg AVFoundation", JavaCvCameraBackend::new);
+        return List.copyOf(candidates);
+    }
+
+    private static void addBackendCandidate(
+        List<CameraBackend> candidates,
+        List<String> failures,
+        String backendName,
+        BackendFactory factory
+    ) {
+        try {
+            candidates.add(factory.create());
+        } catch (Throwable throwable) {
+            failures.add(backendName + ": " + summarize(throwable));
+        }
     }
 
     private static boolean isMacOs() {
@@ -140,5 +157,10 @@ public final class CameraCatalog {
         }
 
         return message;
+    }
+
+    @FunctionalInterface
+    private interface BackendFactory {
+        CameraBackend create();
     }
 }
