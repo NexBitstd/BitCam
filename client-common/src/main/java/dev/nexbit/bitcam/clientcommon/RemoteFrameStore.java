@@ -240,6 +240,11 @@ public final class RemoteFrameStore implements AutoCloseable {
         // Pick (and lazily create) the decoder for the stream's codec, rebuilding it if the codec
         // ever changes — keeps the inter-frame decoder's reference state tied to one codec.
         private FrameDecoder decoderFor(BitCamVideoCodec frameCodec) {
+            if (this.decoder instanceof H264FrameDecoder h264Decoder && h264Decoder.failed()) {
+                this.closeDecoder();
+                this.awaitingKeyframe = true;
+                this.maybeRequestKeyframe();
+            }
             if (this.decoder == null || this.codec != frameCodec) {
                 this.closeDecoder();
                 this.decoder = frameCodec == BitCamVideoCodec.H264 ? new H264FrameDecoder() : new JpegFrameDecoder();

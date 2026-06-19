@@ -31,6 +31,7 @@ final class H264FrameDecoder implements FrameDecoder {
     private final ConcurrentLinkedQueue<FrameMeta> pendingMeta = new ConcurrentLinkedQueue<>();
     private volatile Consumer<DecodedFrame> output;
     private volatile boolean closed;
+    private volatile boolean failed;
     private boolean keyFrameSeen;
     private boolean started;
     private Thread grabThread;
@@ -38,6 +39,9 @@ final class H264FrameDecoder implements FrameDecoder {
     @Override
     public void decode(RemoteFrame frame, Consumer<DecodedFrame> output) {
         if (this.closed) {
+            return;
+        }
+        if (this.failed) {
             return;
         }
         if (!this.keyFrameSeen) {
@@ -89,6 +93,9 @@ final class H264FrameDecoder implements FrameDecoder {
                 ));
             }
         } catch (Throwable ignored) {
+            if (!this.closed) {
+                this.failed = true;
+            }
             // A grabber failure ends decoding; the stream is rebuilt on the next keyframe.
         } finally {
             if (grabber != null) {
@@ -109,6 +116,10 @@ final class H264FrameDecoder implements FrameDecoder {
         if (this.grabThread != null) {
             this.grabThread.interrupt();
         }
+    }
+
+    boolean failed() {
+        return this.failed;
     }
 
     private record FrameMeta(int frameId, long captureTimeMillis, int sourceWidth, int sourceHeight, BitCamBubbleStyle bubbleStyle) {
