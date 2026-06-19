@@ -5,6 +5,7 @@ import com.mojang.blaze3d.platform.InputConstants;
 import dev.nexbit.bitcam.client.render.BitCamBillboardRenderer;
 import dev.nexbit.bitcam.client.ui.BitCamSettingsScreen;
 import dev.nexbit.bitcam.clientcommon.BitCamClientCoordinator;
+import dev.nexbit.bitcam.clientcommon.CameraCatalog;
 import dev.nexbit.bitcam.clientcommon.runtime.BitCamClientSessionController;
 import dev.nexbit.bitcam.clientcommon.runtime.BitCamClientUiHost;
 import dev.nexbit.bitcam.fabric.network.FabricBitCamControlPayload;
@@ -68,6 +69,9 @@ public final class FabricBitCamClientRuntime {
     }
 
     public void initialize() {
+        // Start downloading platform camera natives immediately on game launch (background).
+        CameraCatalog.prewarm(this.platform.configDirectory());
+
         FabricBitCamNetworking.bootstrapPayloadTypes();
         ClientPlayNetworking.registerGlobalReceiver(FabricBitCamControlPayload.TYPE, (payload, context) -> {
             if (payload.decodeSignalPacket() instanceof ServerWelcomeSignalPacket welcome) {

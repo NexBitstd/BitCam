@@ -12,6 +12,7 @@ public record VideoFrameUdpPacket(
     long captureTimeMillis,
     BitCamBubbleStyle bubbleStyle,
     boolean keyFrame,
+    BitCamVideoCodec codec,
     byte[] payload
 ) implements BitCamUdpPacket {
     @Override

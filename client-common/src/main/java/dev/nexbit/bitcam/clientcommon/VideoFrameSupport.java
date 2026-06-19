@@ -1,0 +1,86 @@
+package dev.nexbit.bitcam.clientcommon;
+
+import dev.nexbit.bitcam.protocol.udp.BitCamBubbleShape;
+import dev.nexbit.bitcam.protocol.udp.BitCamBubbleStyle;
+import java.awt.Graphics2D;
+import java.awt.RenderingHints;
+import java.awt.image.BufferedImage;
+
+/** Shared pixel helpers used by both encoders (scaling) and decoders (post-processing). */
+final class VideoFrameSupport {
+    private VideoFrameSupport() {
+    }
+
+    /** Scales {@code source} to the requested size, returning it unchanged when already correct. */
+    static BufferedImage scale(BufferedImage source, int targetWidth, int targetHeight) {
+        if (source.getWidth() == targetWidth && source.getHeight() == targetHeight) {
+            return source;
+        }
+
+        BufferedImage scaled = new BufferedImage(targetWidth, targetHeight, BufferedImage.TYPE_INT_RGB);
+        Graphics2D graphics = scaled.createGraphics();
+        try {
+            graphics.setRenderingHint(RenderingHints.KEY_INTERPOLATION, RenderingHints.VALUE_INTERPOLATION_BILINEAR);
+            graphics.setRenderingHint(RenderingHints.KEY_RENDERING, RenderingHints.VALUE_RENDER_QUALITY);
+            graphics.drawImage(source, 0, 0, targetWidth, targetHeight, null);
+        } finally {
+            graphics.dispose();
+        }
+        return scaled;
+    }
+
+    /**
+     * Applies content-mode cropping, the circle mask and ABGR conversion to a freshly decoded image,
+     * producing a display-ready {@link DecodedFrame}. Runs on the decode thread, never on render.
+     */
+    static DecodedFrame toDecodedFrame(
+        BufferedImage source,
+        int frameId,
+        long captureTimeMillis,
+        int sourceWidth,
+        int sourceHeight,
+        BitCamBubbleStyle style
+    ) {
+        BufferedImage prepared = BitCamBubbleContentLayout.prepareImage(source, style);
+        int width = prepared.getWidth();
+        int height = prepared.getHeight();
+        int[] abgr = new int[width * height];
+        for (int y = 0; y < height; y++) {
+            for (int x = 0; x < width; x++) {
+                abgr[(y * width) + x] = argbToAbgr(prepared.getRGB(x, y));
+            }
+        }
+
+        if (style != null && style.shape() == BitCamBubbleShape.CIRCLE) {
+            applyCircleMask(abgr, width, height);
+        }
+
+        return new DecodedFrame(frameId, captureTimeMillis, sourceWidth, sourceHeight, width, height, abgr, style);
+    }
+
+    private static void applyCircleMask(int[] abgr, int width, int height) {
+        float radius = Math.min(width, height) * 0.5F;
+        float centerX = width * 0.5F;
+        float centerY = height * 0.5F;
+        float radiusSquared = radius * radius;
+
+        for (int y = 0; y < height; y++) {
+            for (int x = 0; x < width; x++) {
+                float dx = (x + 0.5F) - centerX;
+                float dy = (y + 0.5F) - centerY;
+                if ((dx * dx) + (dy * dy) > radiusSquared) {
+                    int index = (y * width) + x;
+                    abgr[index] = abgr[index] & 0x00FFFFFF;
+                }
+            }
+        }
+    }
+
+    private static int argbToAbgr(int argb) {
+        int alpha = (argb >>> 24) & 0xFF;
+        int red = (argb >>> 16) & 0xFF;
+        int green = (argb >>> 8) & 0xFF;
+        int blue = argb & 0xFF;
+        return (alpha << 24) | (blue << 16) | (green << 8) | red;
+    }
+}

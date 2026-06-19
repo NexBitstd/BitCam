@@ -38,21 +38,30 @@ val serverCommonMain = serverCommonSourceSets.named("main").get()
 val sharedClientJavaDir = rootProject.file("versions/shared/src/client/java")
 val sharedClientResourcesDir = rootProject.file("versions/shared/src/client/resources")
 val sharedServerJavaDir = rootProject.file("versions/shared/src/server/java")
-val bytedecoDesktopClassifiers = listOf(
-    "windows-x86_64",
-    "linux-x86_64",
-    "linux-arm64",
-    "macosx-x86_64",
-    "macosx-arm64"
-)
-val javaCvRuntimeLibraries = buildList {
-    add("org.bytedeco:javacv:$javacvVersion")
-    add("org.bytedeco:javacpp:$javacvVersion")
-    add("org.bytedeco:ffmpeg:$ffmpegVersion")
-    bytedecoDesktopClassifiers.forEach { classifier ->
-        add("org.bytedeco:javacpp:$javacvVersion:$classifier")
-        add("org.bytedeco:ffmpeg:$ffmpegVersion:$classifier")
+// The dev runtime only needs the natives for the machine it runs on; end users download just their
+// own platform's natives at runtime (see CameraLibraryManager). This mirrors detectClassifier().
+val hostBytedecoClassifier = run {
+    val osName = System.getProperty("os.name", "").lowercase()
+    val osArch = System.getProperty("os.arch", "").lowercase()
+    val isArm = osArch.contains("aarch64") || osArch.contains("arm")
+    when {
+        osName.contains("win") -> "windows-x86_64"
+        osName.contains("mac") -> if (isArm) "macosx-arm64" else "macosx-x86_64"
+        else -> if (isArm) "linux-arm64" else "linux-x86_64"
     }
+}
+val bytedecoDesktopClassifiers = listOf(hostBytedecoClassifier)
+val javaCvBundledLibraries = listOf(
+    "org.bytedeco:javacv:$javacvVersion",
+    "org.bytedeco:javacpp:$javacvVersion",
+    "org.bytedeco:ffmpeg:$ffmpegVersion"
+)
+val javaCvNativeRuntimeLibraries = bytedecoDesktopClassifiers.flatMap { classifier ->
+    listOf(
+        "org.bytedeco:javacpp:$javacvVersion:$classifier",
+        // GPL ffmpeg build: the only one bundling the libx264 H.264 encoder.
+        "org.bytedeco:ffmpeg:$ffmpegVersion:$classifier-gpl"
+    )
 }
 
 base {
@@ -129,9 +138,12 @@ dependencies {
     add("include", "com.github.sarxos:webcam-capture:0.3.12")
     add("include", "com.electronwill.night-config:toml:3.6.7")
     add("include", "com.electronwill.night-config:core:3.6.7")
-    javaCvRuntimeLibraries.forEach { notation ->
+    javaCvBundledLibraries.forEach { notation ->
         add("clientRuntimeOnly", notation)
         add("include", notation)
+    }
+    javaCvNativeRuntimeLibraries.forEach { notation ->
+        add("clientRuntimeOnly", notation)
     }
     modRuntimeOnly("me.djtheredstoner:DevAuth-fabric:$devauthVersion")
 }

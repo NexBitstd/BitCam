@@ -3,6 +3,7 @@ package dev.nexbit.bitcam.protocol.util;
 import java.io.ByteArrayInputStream;
 import java.io.DataInputStream;
 import java.io.IOException;
+import java.io.InvalidObjectException;
 import java.nio.charset.StandardCharsets;
 import java.util.UUID;
 
@@ -36,6 +37,12 @@ public final class BitCamBinaryReader {
 
     public byte[] readByteArray() throws IOException {
         int length = this.input.readInt();
+        // Guard against malformed/hostile packets: the declared length can never exceed the bytes
+        // actually remaining in the buffer. Without this, a spoofed length triggers a huge
+        // new byte[length] allocation (OOM) before readFully fails — a trivial remote DoS.
+        if (length < 0 || length > this.input.available()) {
+            throw new InvalidObjectException("byte array length out of bounds: " + length);
+        }
         byte[] bytes = new byte[length];
         this.input.readFully(bytes);
         return bytes;

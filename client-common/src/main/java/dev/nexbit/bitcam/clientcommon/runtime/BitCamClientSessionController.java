@@ -88,12 +88,15 @@ public final class BitCamClientSessionController implements AutoCloseable {
         }
 
         if (!this.coordinator.streamingEnabled() && this.coordinator.cameras().isEmpty()) {
-            String statusMessage = this.coordinator.cameraStatusMessage();
-            this.uiHost.showMessage(statusMessage.isBlank() ? "No webcams detected." : statusMessage);
+            this.uiHost.showMessage(this.cameraUnavailableMessage());
             return;
         }
 
         this.coordinator.toggleStreaming();
+        if (this.coordinator.isCameraStarting()) {
+            this.uiHost.showMessage("BitCam camera is starting.");
+            return;
+        }
         this.uiHost.showMessage("BitCam streaming " + (this.coordinator.streamingEnabled() ? "enabled" : "disabled"));
     }
 
@@ -105,8 +108,7 @@ public final class BitCamClientSessionController implements AutoCloseable {
 
         List<CameraDeviceInfo> cameras = this.coordinator.cameras();
         if (cameras.isEmpty()) {
-            String statusMessage = this.coordinator.cameraStatusMessage();
-            this.uiHost.showMessage(statusMessage.isBlank() ? "No webcams detected." : statusMessage);
+            this.uiHost.showMessage(this.cameraUnavailableMessage());
             return;
         }
 
@@ -129,8 +131,7 @@ public final class BitCamClientSessionController implements AutoCloseable {
 
         List<CameraDeviceInfo> cameras = this.coordinator.cameras();
         if (cameras.isEmpty()) {
-            String statusMessage = this.coordinator.cameraStatusMessage();
-            this.uiHost.showMessage(statusMessage.isBlank() ? "No webcams detected." : statusMessage);
+            this.uiHost.showMessage(this.cameraUnavailableMessage());
             return;
         }
 
@@ -151,6 +152,28 @@ public final class BitCamClientSessionController implements AutoCloseable {
         }
 
         this.uiHost.openSettings(this.coordinator);
+    }
+
+    private String cameraUnavailableMessage() {
+        if (this.coordinator == null) {
+            return "No webcams detected.";
+        }
+
+        String libraryFailure = this.coordinator.cameraLibraryDownloadFailure();
+        if (!libraryFailure.isBlank()) {
+            return libraryFailure;
+        }
+
+        if (this.coordinator.isDownloadingCameraLibraries()) {
+            return "BitCam is downloading camera libraries... " + this.coordinator.cameraLibraryDownloadProgress() + "%";
+        }
+
+        if (this.coordinator.isCameraInitializing()) {
+            return "BitCam is still preparing camera libraries.";
+        }
+
+        String statusMessage = this.coordinator.cameraStatusMessage();
+        return statusMessage.isBlank() ? "No webcams detected." : statusMessage;
     }
 
     @Override

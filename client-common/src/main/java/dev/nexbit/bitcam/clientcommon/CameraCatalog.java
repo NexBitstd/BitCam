@@ -1,5 +1,6 @@
 package dev.nexbit.bitcam.clientcommon;
 
+import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
@@ -9,11 +10,40 @@ public final class CameraCatalog {
     private static volatile CameraBackend backend;
     private static volatile boolean backendAvailable = true;
     private static volatile String backendStatusMessage = "";
+    private static volatile boolean initInProgress = false;
 
     private CameraCatalog() {
     }
 
+    public static void prewarm(Path cacheDir) {
+        if (backendConfigured || initInProgress) {
+            return;
+        }
+        initInProgress = true;
+        Thread thread = new Thread(() -> {
+            try {
+                // Ensure platform natives are available — downloads if not bundled.
+                CameraLibraryManager.ensureReady(cacheDir);
+                // Apply the native classloader so JavaCPP can find extracted libs.
+                CameraLibraryManager.applyToThread();
+                ensureBackendConfigured();
+            } finally {
+                initInProgress = false;
+            }
+        }, "bitcam-camera-prewarm");
+        thread.setDaemon(true);
+        thread.start();
+    }
+
+    public static boolean isInitializing() {
+        return (initInProgress && !backendConfigured) || CameraLibraryManager.isDownloading();
+    }
+
     public static List<CameraDeviceInfo> listDevices() {
+        if (isInitializing()) {
+            return List.of();
+        }
+        CameraLibraryManager.applyToThread();
         ensureBackendConfigured();
         if (!backendAvailable || backend == null) {
             return List.of();
@@ -46,6 +76,10 @@ public final class CameraCatalog {
     }
 
     public static List<CameraCaptureMode> listModes(String preferredCameraId) {
+        if (isInitializing()) {
+            return List.of();
+        }
+        CameraLibraryManager.applyToThread();
         ensureBackendConfigured();
         if (!backendAvailable || backend == null) {
             return List.of();
@@ -60,6 +94,7 @@ public final class CameraCatalog {
     }
 
     public static CameraCaptureSession openSession(String preferredName, CameraCaptureMode captureMode) {
+        CameraLibraryManager.applyToThread();
         ensureBackendConfigured();
         if (!backendAvailable || backend == null) {
             throw new IllegalStateException(backendStatusMessage.isBlank() ? "No compatible camera backend is available" : backendStatusMessage);
@@ -76,6 +111,10 @@ public final class CameraCatalog {
     }
 
     public static String statusMessage() {
+        if (isInitializing()) {
+            return "";
+        }
+        CameraLibraryManager.applyToThread();
         ensureBackendConfigured();
         return backendStatusMessage;
     }
@@ -122,8 +161,9 @@ public final class CameraCatalog {
             return List.copyOf(candidates);
         }
 
+        // On Windows/Linux: try JavaCV (DirectShow/V4L2) first, then webcam-capture as fallback.
+        addBackendCandidate(candidates, failures, "JavaCV/FFmpeg", JavaCvCameraBackend::new);
         addBackendCandidate(candidates, failures, "webcam-capture", WebcamCaptureBackend::new);
-        addBackendCandidate(candidates, failures, "JavaCV/FFmpeg AVFoundation", JavaCvCameraBackend::new);
         return List.copyOf(candidates);
     }
 

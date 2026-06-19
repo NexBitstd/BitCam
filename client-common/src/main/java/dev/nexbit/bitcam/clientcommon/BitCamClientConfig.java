@@ -30,6 +30,7 @@ public final class BitCamClientConfig {
     private final Set<UUID> hiddenPlayerIds;
     private boolean setupCompleted;
     private boolean remotePreviewEnabled;
+    private boolean fecEnabled;
 
     private BitCamClientConfig(
         Path file,
@@ -39,7 +40,8 @@ public final class BitCamClientConfig {
         BitCamBubbleStyle bubbleStyle,
         Set<UUID> hiddenPlayerIds,
         boolean setupCompleted,
-        boolean remotePreviewEnabled
+        boolean remotePreviewEnabled,
+        boolean fecEnabled
     ) {
         this.file = file;
         this.preferredCameraName = preferredCameraName;
@@ -49,6 +51,7 @@ public final class BitCamClientConfig {
         this.hiddenPlayerIds = hiddenPlayerIds;
         this.setupCompleted = setupCompleted;
         this.remotePreviewEnabled = remotePreviewEnabled;
+        this.fecEnabled = fecEnabled;
     }
 
     public static BitCamClientConfig load(Path configDirectory) {
@@ -88,7 +91,8 @@ public final class BitCamClientConfig {
                 ),
                 readUuidSet(properties.getProperty("players.hidden", "")),
                 readBoolean(properties, "setup.completed", !preferredCameraName.isBlank()),
-                readBoolean(properties, "stream.remote_preview", true)
+                readBoolean(properties, "stream.remote_preview", true),
+                readBoolean(properties, "stream.fec", true)
             );
             if (!Files.exists(file)) {
                 config.save();
@@ -174,6 +178,15 @@ public final class BitCamClientConfig {
         this.save();
     }
 
+    public boolean fecEnabled() {
+        return this.fecEnabled;
+    }
+
+    public void fecEnabled(boolean fecEnabled) {
+        this.fecEnabled = fecEnabled;
+        this.save();
+    }
+
     private void save() {
         try {
             Properties properties = new Properties();
@@ -195,6 +208,7 @@ public final class BitCamClientConfig {
             properties.setProperty("bubble.content_y_offset_percent", Integer.toString(this.bubbleStyle.contentYOffsetPercent()));
             properties.setProperty("setup.completed", Boolean.toString(this.setupCompleted));
             properties.setProperty("stream.remote_preview", Boolean.toString(this.remotePreviewEnabled));
+            properties.setProperty("stream.fec", Boolean.toString(this.fecEnabled));
             properties.setProperty(
                 "players.hidden",
                 this.hiddenPlayerIds.stream().map(UUID::toString).collect(Collectors.joining(","))

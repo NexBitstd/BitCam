@@ -18,6 +18,7 @@ public final class BitCamPreviewSession implements AutoCloseable {
                 PREVIEW_HEIGHT,
                 PREVIEW_FPS,
                 PREVIEW_QUALITY,
+                null,
                 this.previewStore::accept
             );
             return true;

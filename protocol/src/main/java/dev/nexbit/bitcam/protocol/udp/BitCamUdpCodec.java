@@ -20,6 +20,9 @@ public final class BitCamUdpCodec {
                 case KEEP_ALIVE -> encodeKeepAlive(writer, (KeepAliveUdpPacket) packet);
                 case VIDEO_FRAME -> encodeVideoFrame(writer, (VideoFrameUdpPacket) packet);
                 case STREAM_STOPPED -> encodeStreamStopped(writer, (StreamStoppedUdpPacket) packet);
+                case KEYFRAME_REQUEST -> encodeKeyframeRequest(writer, (KeyframeRequestUdpPacket) packet);
+                case RECEIVER_REPORT -> encodeReceiverReport(writer, (ReceiverReportUdpPacket) packet);
+                case VIDEO_FEC -> encodeVideoFec(writer, (VideoFecUdpPacket) packet);
             }
 
             return writer.toByteArray();
@@ -43,6 +46,9 @@ public final class BitCamUdpCodec {
                 case KEEP_ALIVE -> decodeKeepAlive(reader);
                 case VIDEO_FRAME -> decodeVideoFrame(reader);
                 case STREAM_STOPPED -> decodeStreamStopped(reader);
+                case KEYFRAME_REQUEST -> decodeKeyframeRequest(reader);
+                case RECEIVER_REPORT -> decodeReceiverReport(reader);
+                case VIDEO_FEC -> decodeVideoFec(reader);
             };
         } catch (IOException exception) {
             throw new IllegalStateException("Failed to decode UDP packet (" + bytes.length + " bytes)", exception);
@@ -103,6 +109,7 @@ public final class BitCamUdpCodec {
         writer.writeInt(packet.bubbleStyle().contentXOffsetPercent());
         writer.writeInt(packet.bubbleStyle().contentYOffsetPercent());
         writer.writeBoolean(packet.keyFrame());
+        writer.writeInt(packet.codec().ordinal());
         writer.writeByteArray(packet.payload());
     }
 
@@ -129,6 +136,7 @@ public final class BitCamUdpCodec {
                 reader.readInt()
             ),
             reader.readBoolean(),
+            decodeEnum(reader.readInt(), BitCamVideoCodec.values(), "video codec"),
             reader.readByteArray()
         );
     }
@@ -139,6 +147,47 @@ public final class BitCamUdpCodec {
 
     private static StreamStoppedUdpPacket decodeStreamStopped(BitCamBinaryReader reader) throws IOException {
         return new StreamStoppedUdpPacket(reader.readUuid());
+    }
+
+    private static void encodeKeyframeRequest(BitCamBinaryWriter writer, KeyframeRequestUdpPacket packet) throws IOException {
+        writer.writeUuid(packet.sessionId());
+        writer.writeUuid(packet.streamerId());
+    }
+
+    private static KeyframeRequestUdpPacket decodeKeyframeRequest(BitCamBinaryReader reader) throws IOException {
+        return new KeyframeRequestUdpPacket(reader.readUuid(), reader.readUuid());
+    }
+
+    private static void encodeReceiverReport(BitCamBinaryWriter writer, ReceiverReportUdpPacket packet) throws IOException {
+        writer.writeUuid(packet.sessionId());
+        writer.writeUuid(packet.streamerId());
+        writer.writeInt(packet.lossPermille());
+    }
+
+    private static ReceiverReportUdpPacket decodeReceiverReport(BitCamBinaryReader reader) throws IOException {
+        return new ReceiverReportUdpPacket(reader.readUuid(), reader.readUuid(), reader.readInt());
+    }
+
+    private static void encodeVideoFec(BitCamBinaryWriter writer, VideoFecUdpPacket packet) throws IOException {
+        writer.writeUuid(packet.streamerId());
+        writer.writeInt(packet.frameId());
+        writer.writeInt(packet.groupStart());
+        writer.writeInt(packet.groupShardCount());
+        writer.writeInt(packet.shardLength());
+        writer.writeInt(packet.totalPayloadLength());
+        writer.writeByteArray(packet.parity());
+    }
+
+    private static VideoFecUdpPacket decodeVideoFec(BitCamBinaryReader reader) throws IOException {
+        return new VideoFecUdpPacket(
+            reader.readUuid(),
+            reader.readInt(),
+            reader.readInt(),
+            reader.readInt(),
+            reader.readInt(),
+            reader.readInt(),
+            reader.readByteArray()
+        );
     }
 
     private static <E extends Enum<E>> E decodeEnum(int ordinal, E[] values, String label) throws IOException {

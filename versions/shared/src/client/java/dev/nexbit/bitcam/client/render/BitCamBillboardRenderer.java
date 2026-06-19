@@ -10,8 +10,8 @@ import dev.nexbit.bitcam.clientcommon.BitCamBubbleFacing;
 import dev.nexbit.bitcam.clientcommon.BitCamBubblePlacement;
 import dev.nexbit.bitcam.clientcommon.BitCamBubbleVisuals;
 import dev.nexbit.bitcam.clientcommon.BitCamClientCoordinator;
+import dev.nexbit.bitcam.clientcommon.DecodedFrame;
 import dev.nexbit.bitcam.clientcommon.LocalPreviewFrame;
-import dev.nexbit.bitcam.clientcommon.RemoteFrame;
 import dev.nexbit.bitcam.clientcommon.RemoteFrameStore;
 import dev.nexbit.bitcam.common.BitCamMetadata;
 import dev.nexbit.bitcam.protocol.udp.BitCamBubbleRenderMode;
@@ -27,6 +27,7 @@ import java.util.Set;
 import java.util.UUID;
 import java.util.function.Supplier;
 import org.jetbrains.annotations.Nullable;
+import org.joml.Quaternionf;
 import javax.imageio.ImageIO;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.model.geom.ModelPart;
@@ -165,11 +166,11 @@ public final class BitCamBillboardRenderer implements AutoCloseable {
     }
 
     private RenderFrameData resolvePlayerFrame(AbstractClientPlayer player, BitCamClientCoordinator coordinator, RemoteFrameStore frameStore) {
-        RemoteFrame remoteFrame = frameStore.frame(player.getUUID());
-        if (remoteFrame != null && System.currentTimeMillis() - remoteFrame.receivedAtMillis() <= FRAME_TTL_MS) {
-            StreamTexture texture = this.updateTexture(remoteFrame);
+        DecodedFrame remoteFrame = frameStore.frame(player.getUUID());
+        if (remoteFrame != null) {
+            StreamTexture texture = this.uploadDecodedTexture(player.getUUID(), remoteFrame);
             if (texture != null) {
-                return new RenderFrameData(remoteFrame.width(), remoteFrame.height(), remoteFrame.bubbleStyle(), texture.textureId());
+                return new RenderFrameData(remoteFrame.sourceWidth(), remoteFrame.sourceHeight(), remoteFrame.bubbleStyle(), texture.textureId());
             }
         }
 
@@ -268,21 +269,22 @@ public final class BitCamBillboardRenderer implements AutoCloseable {
         float headAbsoluteYaw = bodyRot + viewYaw;
 
         switch (bubbleStyle.renderMode()) {
-            // Fully faces the viewer: apply the camera's exact orientation quaternion.
-            // In clean world space this is the direct, mathematically exact solution.
+            // Fully faces the viewer's position via a look-at computed from the bubble anchor and the
+            // viewer, not the camera's view plane — so off-centre bubbles still turn toward the viewer.
+            // Own bubble targets the real camera; remote bubbles target the local player's position.
             case BILLBOARD ->
-                matrices.mulPose(this.client.gameRenderer.getMainCamera().rotation());
+                this.applyBillboardFacing(matrices, player, bubbleStyle, scale);
             // Horizontally fixed to the streamer's head yaw; vertically tilts toward viewer position.
             case VERTICAL_BILLBOARD -> {
-                BitCamBubbleFacing cameraFacing = this.cameraFacing(player, bubbleStyle, scale);
+                BitCamBubbleFacing facing = this.viewerFacing(player, bubbleStyle, scale);
                 matrices.mulPose(Axis.YP.rotationDegrees(180.0F - headAbsoluteYaw));
-                matrices.mulPose(Axis.XP.rotationDegrees(-cameraFacing.pitchDegrees() + 180.0F));
+                matrices.mulPose(Axis.XP.rotationDegrees(-facing.pitchDegrees() + 180.0F));
                 matrices.mulPose(Axis.ZP.rotationDegrees(180.0F));
             }
-            // Faces the viewer horizontally (yaw tracks camera position); lies flat at 90°.
+            // Faces the viewer horizontally (yaw tracks viewer position); lies flat at 90°.
             case HORIZONTAL_BILLBOARD -> {
-                BitCamBubbleFacing cameraFacing = this.cameraFacing(player, bubbleStyle, scale);
-                matrices.mulPose(Axis.YP.rotationDegrees(180.0F - cameraFacing.yawDegrees()));
+                BitCamBubbleFacing facing = this.viewerFacing(player, bubbleStyle, scale);
+                matrices.mulPose(Axis.YP.rotationDegrees(180.0F - facing.yawDegrees()));
                 matrices.mulPose(Axis.XP.rotationDegrees(180.0F));
                 matrices.mulPose(Axis.ZP.rotationDegrees(180.0F));
             }
@@ -311,12 +313,43 @@ public final class BitCamBillboardRenderer implements AutoCloseable {
         }
     }
 
-    private BitCamBubbleFacing cameraFacing(AbstractClientPlayer player, BitCamBubbleStyle bubbleStyle, float scale) {
-        Vec3 cameraPos = this.client.gameRenderer.getMainCamera().getPosition();
-        double anchorX = player.getX();
-        double anchorY = player.getY() + player.getBbHeight() + BitCamBubblePlacement.worldVerticalOffset(bubbleStyle, scale);
-        double anchorZ = player.getZ();
-        return BitCamBubbleFacing.faceViewer(anchorX, anchorY, anchorZ, cameraPos.x, cameraPos.y, cameraPos.z);
+    private void applyBillboardFacing(PoseStack matrices, AbstractClientPlayer player, BitCamBubbleStyle bubbleStyle, float scale) {
+        Vec3 anchor = this.bubbleAnchorPosition(player, bubbleStyle, scale);
+        Vec3 viewer = this.billboardViewerPosition(player);
+        double dx = anchor.x - viewer.x;
+        double dy = anchor.y - viewer.y;
+        double dz = anchor.z - viewer.z;
+        double horizontalDistance = Math.sqrt((dx * dx) + (dz * dz));
+        float yaw = (float) Math.atan2(-dx, dz);
+        float pitch = (float) Math.atan2(-dy, horizontalDistance);
+        // Reproduce Camera#rotation() for a virtual camera placed at the viewer and aimed at the
+        // bubble, so the quad squarely faces the viewer's position in clean world space.
+        matrices.mulPose(new Quaternionf().rotationYXZ((float) Math.PI - yaw, -pitch, 0.0F));
+    }
+
+    private BitCamBubbleFacing viewerFacing(AbstractClientPlayer player, BitCamBubbleStyle bubbleStyle, float scale) {
+        Vec3 anchor = this.bubbleAnchorPosition(player, bubbleStyle, scale);
+        Vec3 viewer = this.billboardViewerPosition(player);
+        return BitCamBubbleFacing.faceViewer(anchor.x, anchor.y, anchor.z, viewer.x, viewer.y, viewer.z);
+    }
+
+    private Vec3 bubbleAnchorPosition(AbstractClientPlayer player, BitCamBubbleStyle bubbleStyle, float scale) {
+        return new Vec3(
+            player.getX(),
+            player.getY() + player.getBbHeight() + BitCamBubblePlacement.worldVerticalOffset(bubbleStyle, scale),
+            player.getZ()
+        );
+    }
+
+    private Vec3 billboardViewerPosition(AbstractClientPlayer player) {
+        // The local player's own bubble always targets the real camera, so it stays readable in
+        // third person where the camera sits offset behind the body.
+        if (this.client.player == null || this.client.player == player) {
+            return this.client.gameRenderer.getMainCamera().getPosition();
+        }
+        // Remote bubbles target the local player's position (not the camera), so they stay aimed at
+        // "me" instead of swinging while the third-person camera is orbited.
+        return this.client.player.getEyePosition();
     }
 
     private void addQuad(VertexConsumer consumer, PoseStack.Pose pose, float halfWidth, float halfHeight, float z, int argb, boolean flipVerticalUv, boolean flipHorizontalUv) {
@@ -335,8 +368,32 @@ public final class BitCamBillboardRenderer implements AutoCloseable {
         consumer.addVertex(pose, -halfWidth, halfHeight, z).setColor(red, green, blue, alpha).setUv(leftU, topV).setOverlay(OverlayTexture.NO_OVERLAY).setLight(LightTexture.FULL_BRIGHT).setNormal(pose, 0.0F, 0.0F, -1.0F);
     }
 
-    private StreamTexture updateTexture(RemoteFrame frame) {
-        return this.updateTexture(frame.streamerId(), frame.frameId(), frame.payload(), frame.bubbleStyle());
+    private StreamTexture uploadDecodedTexture(UUID streamerId, DecodedFrame frame) {
+        StreamTexture streamTexture = this.textures.computeIfAbsent(streamerId, this::createTexture);
+
+        if (streamTexture.lastFrameId() == frame.frameId()) {
+            return streamTexture;
+        }
+
+        // Pixels were decoded, cropped and masked off-thread — here we only copy them into a
+        // NativeImage and upload, so the render thread never touches JPEG/H.264 decoding.
+        streamTexture = this.ensureTextureSize(streamerId, streamTexture, frame.pixelWidth(), frame.pixelHeight());
+        NativeImage image = new NativeImage(frame.pixelWidth(), frame.pixelHeight(), true);
+        int[] abgr = frame.abgrPixels();
+        for (int y = 0; y < frame.pixelHeight(); y++) {
+            for (int x = 0; x < frame.pixelWidth(); x++) {
+                image.setPixelABGR(x, y, abgr[(y * frame.pixelWidth()) + x]);
+            }
+        }
+
+        NativeImage previous = streamTexture.texture().getPixels();
+        if (previous != null) {
+            previous.close();
+        }
+        streamTexture.texture().setPixels(image);
+        streamTexture.texture().upload();
+        streamTexture.lastFrameId(frame.frameId());
+        return streamTexture;
     }
 
     private StreamTexture updateTexture(UUID streamerId, int frameId, byte[] payload, BitCamBubbleStyle bubbleStyle) {

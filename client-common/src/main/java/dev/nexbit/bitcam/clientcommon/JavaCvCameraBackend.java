@@ -4,6 +4,8 @@ import java.awt.image.BufferedImage;
 import java.io.BufferedReader;
 import java.io.InputStreamReader;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Comparator;
@@ -16,16 +18,23 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
+import org.bytedeco.ffmpeg.ffmpeg;
+import org.bytedeco.javacpp.Loader;
 import org.bytedeco.javacv.FFmpegFrameGrabber;
 import org.bytedeco.javacv.Frame;
 import org.bytedeco.javacv.FrameGrabber;
 import org.bytedeco.javacv.Java2DFrameConverter;
 
 public final class JavaCvCameraBackend implements CameraBackend {
-    private static final Duration FFMPEG_LIST_TIMEOUT = Duration.ofSeconds(3);
-    private static final Pattern FFMPEG_DEVICE_PATTERN = Pattern.compile("^.*\\[(\\d+)]\\s+(.+)$");
-    private static final Pattern FFMPEG_MODE_PATTERN = Pattern.compile("^.*?(\\d+)x(\\d+)@\\[(\\d+(?:\\.\\d+)?)\\s+(\\d+(?:\\.\\d+)?)\\]fps.*$");
+    private static final boolean IS_WINDOWS = System.getProperty("os.name", "").toLowerCase(Locale.ROOT).contains("win");
+    private static final boolean IS_MAC = System.getProperty("os.name", "").toLowerCase(Locale.ROOT).contains("mac");
+
+    private static final Duration FFMPEG_LIST_TIMEOUT = Duration.ofSeconds(4);
+    private static final Pattern AVFOUNDATION_DEVICE_PATTERN = Pattern.compile("^.*\\[(\\d+)]\\s+(.+)$");
+    private static final Pattern AVFOUNDATION_MODE_PATTERN = Pattern.compile("^.*?(\\d+)x(\\d+)@\\[(\\d+(?:\\.\\d+)?)\\s+(\\d+(?:\\.\\d+)?)\\]fps.*$");
+    private static final Pattern DSHOW_MODE_PATTERN = Pattern.compile("min s=(\\d+)x(\\d+) fps=(\\d+(?:\\.\\d+)?) max s=\\d+x\\d+ fps=(\\d+(?:\\.\\d+)?)");
     private static final CameraCaptureMode PROBE_MODE = new CameraCaptureMode(1, 1, 30);
+
     private volatile List<CameraDeviceInfo> cachedDevices = List.of();
     private volatile String cachedFailureMessage = "";
     private volatile boolean scanCompleted;
@@ -33,7 +42,9 @@ public final class JavaCvCameraBackend implements CameraBackend {
 
     @Override
     public String backendName() {
-        return "JavaCV/FFmpeg AVFoundation";
+        if (IS_WINDOWS) return "JavaCV/FFmpeg DirectShow";
+        if (IS_MAC) return "JavaCV/FFmpeg AVFoundation";
+        return "JavaCV/FFmpeg V4L2";
     }
 
     @Override
@@ -58,7 +69,7 @@ public final class JavaCvCameraBackend implements CameraBackend {
             return this.cachedDevices;
         }
 
-        this.cachedFailureMessage = "No AVFoundation camera devices were detected. If you just granted permission, restart the client and press Refresh.";
+        this.cachedFailureMessage = noDevicesMessage();
         throw new IllegalStateException(this.cachedFailureMessage);
     }
 
@@ -79,7 +90,7 @@ public final class JavaCvCameraBackend implements CameraBackend {
 
         String deviceId = resolveDeviceId(preferredCameraId);
         if (deviceId.isBlank()) {
-            throw new IllegalStateException("No AVFoundation camera devices are available");
+            throw new IllegalStateException("No " + backendName() + " camera devices are available");
         }
 
         List<CameraCaptureMode> supportedModes = this.listModes(deviceId);
@@ -87,7 +98,7 @@ public final class JavaCvCameraBackend implements CameraBackend {
         List<String> failures = new ArrayList<>();
 
         for (CameraCaptureMode mode : candidates) {
-            FFmpegFrameGrabber grabber = new FFmpegFrameGrabber(deviceId + ":none");
+            FFmpegFrameGrabber grabber = new FFmpegFrameGrabber(grabberInput(deviceId));
             configureGrabber(grabber, mode);
             try {
                 grabber.start();
@@ -97,7 +108,6 @@ public final class JavaCvCameraBackend implements CameraBackend {
                 try {
                     grabber.release();
                 } catch (FrameGrabber.Exception ignored) {
-                    // The start failure already contains the useful context.
                 }
             }
         }
@@ -115,7 +125,15 @@ public final class JavaCvCameraBackend implements CameraBackend {
         this.scanCompleted = false;
     }
 
+    // --- Device enumeration ---
+
     private List<CameraDeviceInfo> enumerateViaFfmpegCli() {
+        if (IS_WINDOWS) return enumerateDShow();
+        if (IS_MAC) return enumerateAvFoundation();
+        return enumerateV4l2();
+    }
+
+    private List<CameraDeviceInfo> enumerateAvFoundation() {
         String ffmpegBinary = resolveFfmpegBinary();
         if (ffmpegBinary == null) {
             return List.of();
@@ -136,20 +154,16 @@ public final class JavaCvCameraBackend implements CameraBackend {
                         inVideoSection = true;
                         continue;
                     }
-
                     if (line.contains("AVFoundation audio devices:")) {
                         break;
                     }
-
                     if (!inVideoSection) {
                         continue;
                     }
-
-                    Matcher matcher = FFMPEG_DEVICE_PATTERN.matcher(line.trim());
+                    Matcher matcher = AVFOUNDATION_DEVICE_PATTERN.matcher(line.trim());
                     if (!matcher.matches()) {
                         continue;
                     }
-
                     String deviceId = matcher.group(1);
                     String deviceName = matcher.group(2).trim();
                     if (isScreenCaptureDevice(deviceName)) {
@@ -170,6 +184,231 @@ public final class JavaCvCameraBackend implements CameraBackend {
         }
     }
 
+    private List<CameraDeviceInfo> enumerateDShow() {
+        String ffmpegBinary = resolveFfmpegBinary();
+        if (ffmpegBinary == null) {
+            return List.of();
+        }
+
+        Process process = null;
+        try {
+            process = new ProcessBuilder(ffmpegBinary, "-f", "dshow", "-list_devices", "true", "-i", "dummy")
+                .redirectErrorStream(true)
+                .start();
+
+            List<CameraDeviceInfo> devices = new ArrayList<>();
+            boolean inVideoSection = false;
+            try (BufferedReader reader = new BufferedReader(new InputStreamReader(process.getInputStream(), StandardCharsets.UTF_8))) {
+                String line;
+                while ((line = reader.readLine()) != null) {
+                    String lower = line.toLowerCase(Locale.ROOT);
+                    if (lower.contains("directshow video devices")) {
+                        inVideoSection = true;
+                        continue;
+                    }
+                    if (lower.contains("directshow audio devices")) {
+                        break;
+                    }
+                    if (!inVideoSection || lower.contains("alternative name")) {
+                        continue;
+                    }
+                    // Match: [dshow @ 0x...]  "Camera Name"  or  "Camera Name" (video)
+                    int firstQuote = line.indexOf('"');
+                    int lastQuote = line.lastIndexOf('"');
+                    if (firstQuote < 0 || lastQuote <= firstQuote) {
+                        continue;
+                    }
+                    // Skip if the name starts with @  (alternative name values)
+                    String name = line.substring(firstQuote + 1, lastQuote);
+                    if (name.startsWith("@") || name.isBlank()) {
+                        continue;
+                    }
+                    devices.add(new CameraDeviceInfo(name, name));
+                }
+            }
+
+            process.waitFor(FFMPEG_LIST_TIMEOUT.toMillis(), TimeUnit.MILLISECONDS);
+            return devices;
+        } catch (Exception ignored) {
+            return List.of();
+        } finally {
+            if (process != null) {
+                process.destroyForcibly();
+            }
+        }
+    }
+
+    private List<CameraDeviceInfo> enumerateV4l2() {
+        List<CameraDeviceInfo> devices = new ArrayList<>();
+        for (int i = 0; i < 16; i++) {
+            Path videoDevice = Path.of("/dev/video" + i);
+            if (!Files.exists(videoDevice)) {
+                continue;
+            }
+            String name = readV4l2DeviceName(i);
+            devices.add(new CameraDeviceInfo(videoDevice.toString(), name));
+        }
+        return devices;
+    }
+
+    private static String readV4l2DeviceName(int index) {
+        Path namePath = Path.of("/sys/class/video4linux/video" + index + "/name");
+        try {
+            String name = Files.readString(namePath).trim();
+            if (!name.isBlank()) {
+                return name;
+            }
+        } catch (Exception ignored) {
+        }
+        return "/dev/video" + index;
+    }
+
+    // --- Mode probing ---
+
+    private List<CameraCaptureMode> probeModesViaFfmpegCli(String deviceId) {
+        if (IS_WINDOWS) return probeModesViaFfmpegCliDShow(deviceId);
+        if (IS_MAC) return probeModesViaFfmpegCliAvFoundation(deviceId);
+        return probeModesViaFfmpegCliV4l2(deviceId);
+    }
+
+    private List<CameraCaptureMode> probeModesViaFfmpegCliAvFoundation(String deviceId) {
+        String ffmpegBinary = resolveFfmpegBinary();
+        if (ffmpegBinary == null) {
+            return CameraCaptureMode.COMMON_FALLBACKS;
+        }
+
+        Process process = null;
+        try {
+            process = new ProcessBuilder(
+                ffmpegBinary,
+                "-f", "avfoundation",
+                "-video_size", PROBE_MODE.width() + "x" + PROBE_MODE.height(),
+                "-framerate", Integer.toString(PROBE_MODE.fps()),
+                "-i", deviceId + ":none",
+                "-t", "0.1",
+                "-f", "null", "-"
+            ).redirectErrorStream(true).start();
+
+            LinkedHashSet<CameraCaptureMode> modes = new LinkedHashSet<>();
+            try (BufferedReader reader = new BufferedReader(new InputStreamReader(process.getInputStream(), StandardCharsets.UTF_8))) {
+                String line;
+                while ((line = reader.readLine()) != null) {
+                    Matcher matcher = AVFOUNDATION_MODE_PATTERN.matcher(line.trim());
+                    if (!matcher.matches()) {
+                        continue;
+                    }
+                    int width = Integer.parseInt(matcher.group(1));
+                    int height = Integer.parseInt(matcher.group(2));
+                    double minFps = Double.parseDouble(matcher.group(3));
+                    double maxFps = Double.parseDouble(matcher.group(4));
+                    addModeVariants(modes, width, height, minFps, maxFps);
+                }
+            }
+
+            process.waitFor(FFMPEG_LIST_TIMEOUT.toMillis(), TimeUnit.MILLISECONDS);
+            if (!modes.isEmpty()) {
+                return List.copyOf(modes);
+            }
+        } catch (Exception ignored) {
+        } finally {
+            if (process != null) {
+                process.destroyForcibly();
+            }
+        }
+
+        return CameraCaptureMode.COMMON_FALLBACKS;
+    }
+
+    private List<CameraCaptureMode> probeModesViaFfmpegCliDShow(String deviceId) {
+        String ffmpegBinary = resolveFfmpegBinary();
+        if (ffmpegBinary == null) {
+            return CameraCaptureMode.COMMON_FALLBACKS;
+        }
+
+        Process process = null;
+        try {
+            process = new ProcessBuilder(
+                ffmpegBinary,
+                "-f", "dshow",
+                "-list_options", "true",
+                "-i", "video=" + deviceId
+            ).redirectErrorStream(true).start();
+
+            LinkedHashSet<CameraCaptureMode> modes = new LinkedHashSet<>();
+            try (BufferedReader reader = new BufferedReader(new InputStreamReader(process.getInputStream(), StandardCharsets.UTF_8))) {
+                String line;
+                while ((line = reader.readLine()) != null) {
+                    Matcher matcher = DSHOW_MODE_PATTERN.matcher(line);
+                    if (!matcher.find()) {
+                        continue;
+                    }
+                    int width = Integer.parseInt(matcher.group(1));
+                    int height = Integer.parseInt(matcher.group(2));
+                    double minFps = Double.parseDouble(matcher.group(3));
+                    double maxFps = Double.parseDouble(matcher.group(4));
+                    addModeVariants(modes, width, height, minFps, maxFps);
+                }
+            }
+
+            process.waitFor(FFMPEG_LIST_TIMEOUT.toMillis(), TimeUnit.MILLISECONDS);
+            if (!modes.isEmpty()) {
+                return List.copyOf(modes);
+            }
+        } catch (Exception ignored) {
+        } finally {
+            if (process != null) {
+                process.destroyForcibly();
+            }
+        }
+
+        return CameraCaptureMode.COMMON_FALLBACKS;
+    }
+
+    private List<CameraCaptureMode> probeModesViaFfmpegCliV4l2(String deviceId) {
+        String ffmpegBinary = resolveFfmpegBinary();
+        if (ffmpegBinary == null) {
+            return CameraCaptureMode.COMMON_FALLBACKS;
+        }
+
+        // v4l2 -list_formats all outputs lines like:
+        // [video4linux2,v4l2 @ ...] Raw       : yuyv422 : YUYV 4:2:2 : {width}x{height}
+        // Not easy to parse FPS from this, so fall back to common fallbacks for now.
+        // The grabber will negotiate a working mode from candidates.
+        return CameraCaptureMode.COMMON_FALLBACKS;
+    }
+
+    // --- Grabber input per platform ---
+
+    private static String grabberInput(String deviceId) {
+        if (IS_WINDOWS) return "video=" + deviceId;
+        if (IS_MAC) return deviceId + ":none";
+        return deviceId; // v4l2: /dev/video0
+    }
+
+    // --- Grabber configuration ---
+
+    private static void configureGrabber(FFmpegFrameGrabber grabber, CameraCaptureMode mode) {
+        if (IS_WINDOWS) {
+            grabber.setFormat("dshow");
+        } else if (IS_MAC) {
+            grabber.setFormat("avfoundation");
+            grabber.setOption("pixel_format", "bgr0");
+        } else {
+            grabber.setFormat("v4l2");
+            grabber.setOption("pixel_format", "bgr0");
+        }
+
+        if (mode != null && mode.isSpecified()) {
+            grabber.setImageWidth(mode.width());
+            grabber.setImageHeight(mode.height());
+            grabber.setFrameRate(mode.fps());
+            grabber.setOption("framerate", Integer.toString(Math.max(1, mode.fps())));
+            grabber.setOption("video_size", mode.width() + "x" + mode.height());
+        }
+    }
+
+    // --- Device ID resolution ---
+
     private String resolveDeviceId(String preferredCameraId) throws FrameGrabber.Exception {
         List<CameraDeviceInfo> devices = this.cachedDevices.isEmpty() ? listDevices() : this.cachedDevices;
         if (devices.isEmpty()) {
@@ -187,74 +426,7 @@ public final class JavaCvCameraBackend implements CameraBackend {
         return devices.getFirst().id();
     }
 
-    private List<CameraCaptureMode> probeModesViaFfmpegCli(String deviceId) {
-        String ffmpegBinary = resolveFfmpegBinary();
-        if (ffmpegBinary == null) {
-            return CameraCaptureMode.COMMON_FALLBACKS;
-        }
-
-        Process process = null;
-        try {
-            process = new ProcessBuilder(
-                ffmpegBinary,
-                "-f",
-                "avfoundation",
-                "-video_size",
-                PROBE_MODE.width() + "x" + PROBE_MODE.height(),
-                "-framerate",
-                Integer.toString(PROBE_MODE.fps()),
-                "-i",
-                deviceId + ":none",
-                "-t",
-                "0.1",
-                "-f",
-                "null",
-                "-"
-            ).redirectErrorStream(true).start();
-
-            LinkedHashSet<CameraCaptureMode> modes = new LinkedHashSet<>();
-            try (BufferedReader reader = new BufferedReader(new InputStreamReader(process.getInputStream(), StandardCharsets.UTF_8))) {
-                String line;
-                while ((line = reader.readLine()) != null) {
-                    Matcher matcher = FFMPEG_MODE_PATTERN.matcher(line.trim());
-                    if (!matcher.matches()) {
-                        continue;
-                    }
-
-                    int width = Integer.parseInt(matcher.group(1));
-                    int height = Integer.parseInt(matcher.group(2));
-                    double minFps = Double.parseDouble(matcher.group(3));
-                    double maxFps = Double.parseDouble(matcher.group(4));
-                    addModeVariants(modes, width, height, minFps, maxFps);
-                }
-            }
-
-            process.waitFor(FFMPEG_LIST_TIMEOUT.toMillis(), TimeUnit.MILLISECONDS);
-            if (!modes.isEmpty()) {
-                return List.copyOf(modes);
-            }
-        } catch (Exception ignored) {
-            // Fall back to common modes below.
-        } finally {
-            if (process != null) {
-                process.destroyForcibly();
-            }
-        }
-
-        return CameraCaptureMode.COMMON_FALLBACKS;
-    }
-
-    private static void configureGrabber(FFmpegFrameGrabber grabber, CameraCaptureMode mode) {
-        grabber.setFormat("avfoundation");
-        grabber.setOption("pixel_format", "bgr0");
-        if (mode != null && mode.isSpecified()) {
-            grabber.setImageWidth(mode.width());
-            grabber.setImageHeight(mode.height());
-            grabber.setFrameRate(mode.fps());
-            grabber.setOption("framerate", Integer.toString(Math.max(1, mode.fps())));
-            grabber.setOption("video_size", mode.width() + "x" + mode.height());
-        }
-    }
+    // --- Mode selection helpers ---
 
     private static List<CameraCaptureMode> buildCandidateModes(CameraCaptureMode requestedMode, List<CameraCaptureMode> supportedModes) {
         LinkedHashSet<CameraCaptureMode> candidates = new LinkedHashSet<>();
@@ -324,43 +496,74 @@ public final class JavaCvCameraBackend implements CameraBackend {
         }
     }
 
+    // --- FFmpeg binary resolution ---
+
     private static String resolveFfmpegBinary() {
+        // 1. User-configured override
         String configured = System.getProperty("bitcam.ffmpeg.path", "").trim();
         if (!configured.isEmpty()) {
             return configured;
         }
 
-        String path = System.getenv("PATH");
-        if (path == null || path.isBlank()) {
-            return null;
-        }
-
-        String separator = System.getProperty("path.separator", ":");
-        for (String part : path.split(Pattern.quote(separator))) {
-            if (part == null || part.isBlank()) {
-                continue;
+        // 2. Use the FFmpeg executable bundled with JavaCV — works without any system install.
+        //    Loader.load() extracts the platform binary to a temp cache and returns its path.
+        try {
+            String bundled = Loader.load(ffmpeg.class);
+            if (bundled != null && !bundled.isBlank()) {
+                return bundled;
             }
+        } catch (Exception ignored) {
+        }
 
-            java.nio.file.Path candidate = java.nio.file.Path.of(part, "ffmpeg");
-            if (java.nio.file.Files.isExecutable(candidate)) {
-                return candidate.toAbsolutePath().toString();
+        // 3. Fall back to a system-installed ffmpeg in PATH
+        String executableName = IS_WINDOWS ? "ffmpeg.exe" : "ffmpeg";
+        String pathEnv = System.getenv("PATH");
+        if (pathEnv != null && !pathEnv.isBlank()) {
+            String separator = System.getProperty("path.separator", IS_WINDOWS ? ";" : ":");
+            for (String part : pathEnv.split(Pattern.quote(separator))) {
+                if (part == null || part.isBlank()) {
+                    continue;
+                }
+                Path candidate = Path.of(part, executableName);
+                if (Files.isExecutable(candidate)) {
+                    return candidate.toAbsolutePath().toString();
+                }
             }
         }
 
-        if (isMacOs() && java.nio.file.Files.isExecutable(java.nio.file.Path.of("/opt/homebrew/bin/ffmpeg"))) {
-            return "/opt/homebrew/bin/ffmpeg";
+        if (IS_MAC) {
+            for (String macPath : List.of("/opt/homebrew/bin/ffmpeg", "/usr/local/bin/ffmpeg")) {
+                if (Files.isExecutable(Path.of(macPath))) {
+                    return macPath;
+                }
+            }
         }
 
-        if (isMacOs() && java.nio.file.Files.isExecutable(java.nio.file.Path.of("/usr/local/bin/ffmpeg"))) {
-            return "/usr/local/bin/ffmpeg";
+        if (IS_WINDOWS) {
+            for (String winPath : List.of(
+                "C:\\ffmpeg\\bin\\ffmpeg.exe",
+                "C:\\Program Files\\ffmpeg\\bin\\ffmpeg.exe",
+                "C:\\Program Files (x86)\\ffmpeg\\bin\\ffmpeg.exe"
+            )) {
+                if (Files.isExecutable(Path.of(winPath))) {
+                    return winPath;
+                }
+            }
         }
 
         return null;
     }
 
-    private static boolean isMacOs() {
-        String osName = System.getProperty("os.name", "").toLowerCase(Locale.ROOT);
-        return osName.contains("mac");
+    // --- Helpers ---
+
+    private static String noDevicesMessage() {
+        if (IS_WINDOWS) {
+            return "No DirectShow camera devices were detected. Make sure your webcam is connected and drivers are installed.";
+        }
+        if (IS_MAC) {
+            return "No AVFoundation camera devices were detected. If you just granted permission, restart the client and press Refresh.";
+        }
+        return "No V4L2 camera devices were detected (/dev/videoX). Make sure your webcam is connected.";
     }
 
     private static boolean isScreenCaptureDevice(String deviceName) {
@@ -381,6 +584,8 @@ public final class JavaCvCameraBackend implements CameraBackend {
 
         return message;
     }
+
+    // --- Session ---
 
     private static final class Session implements CameraCaptureSession {
         private final FFmpegFrameGrabber grabber;

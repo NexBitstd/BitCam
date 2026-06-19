@@ -5,6 +5,7 @@ import com.mojang.blaze3d.platform.InputConstants;
 import dev.nexbit.bitcam.client.render.BitCamBillboardRenderer;
 import dev.nexbit.bitcam.client.ui.BitCamSettingsScreen;
 import dev.nexbit.bitcam.clientcommon.BitCamClientCoordinator;
+import dev.nexbit.bitcam.clientcommon.CameraCatalog;
 import dev.nexbit.bitcam.clientcommon.runtime.BitCamClientSessionController;
 import dev.nexbit.bitcam.clientcommon.runtime.BitCamClientUiHost;
 import dev.nexbit.bitcam.neoforge.network.NeoForgeBitCamControlPayload;
@@ -40,6 +41,8 @@ public final class NeoForgeBitCamClientRuntime {
 
     public NeoForgeBitCamClientRuntime(String minecraftVersion) {
         this.platform = NeoForgePlatformAccess.createClient(minecraftVersion);
+        // Start downloading platform camera natives immediately on game launch (background).
+        CameraCatalog.prewarm(this.platform.configDirectory());
         this.sessionController = new BitCamClientSessionController(
             this.platform,
             () -> this.client.player.getUUID(),

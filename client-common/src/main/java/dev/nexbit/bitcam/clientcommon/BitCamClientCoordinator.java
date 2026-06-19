@@ -8,6 +8,8 @@ import dev.nexbit.bitcam.protocol.signal.BitCamStreamQualityProfile;
 import dev.nexbit.bitcam.protocol.udp.BitCamBubbleStyle;
 import java.util.List;
 import java.util.UUID;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 import java.util.function.Supplier;
 
 public final class BitCamClientCoordinator implements AutoCloseable {
@@ -19,9 +21,16 @@ public final class BitCamClientCoordinator implements AutoCloseable {
     private final LocalPreviewStore previewStore = new LocalPreviewStore();
     private final CameraCaptureController cameraCapture = new CameraCaptureController();
 
+    private final ExecutorService cameraExecutor = Executors.newSingleThreadExecutor(runnable -> {
+        Thread thread = new Thread(runnable, "bitcam-camera");
+        thread.setDaemon(true);
+        return thread;
+    });
+
     private BitCamUdpClient udpClient;
     private String lastCameraErrorMessage = "";
-    private boolean streamingEnabled;
+    private volatile boolean streamingEnabled;
+    private volatile boolean cameraStarting;
     private ServerWelcomeSignalPacket welcome;
     private List<BitCamStreamQualityProfile> availableQualityProfiles = List.of();
     private String selectedQualityProfileId = "";
@@ -54,7 +63,13 @@ public final class BitCamClientCoordinator implements AutoCloseable {
             this.udpClient.close();
         }
 
-        this.udpClient = new BitCamUdpClient(this.platform, this.frameStore);
+        this.udpClient = new BitCamUdpClient(
+            this.platform,
+            this.frameStore,
+            this.cameraCapture::requestKeyframe,
+            this.cameraCapture::reportNetworkLoss,
+            this.config.fecEnabled()
+        );
         this.udpClient.connect(welcome);
         this.platform.logger().info("BitCam client received UDP endpoint " + welcome.udpHost() + ":" + welcome.udpPort() + " and is waiting for session acceptance");
 
@@ -64,6 +79,9 @@ public final class BitCamClientCoordinator implements AutoCloseable {
     }
 
     public void toggleStreaming() {
+        if (this.cameraStarting) {
+            return;
+        }
         if (this.streamingEnabled) {
             this.streamingEnabled = false;
             this.stopStreaming();
@@ -75,6 +93,26 @@ public final class BitCamClientCoordinator implements AutoCloseable {
 
     public boolean streamingEnabled() {
         return this.streamingEnabled;
+    }
+
+    public boolean isCameraStarting() {
+        return this.cameraStarting;
+    }
+
+    public boolean isCameraInitializing() {
+        return CameraCatalog.isInitializing();
+    }
+
+    public boolean isDownloadingCameraLibraries() {
+        return CameraLibraryManager.isDownloading();
+    }
+
+    public int cameraLibraryDownloadProgress() {
+        return CameraLibraryManager.downloadProgressPercent();
+    }
+
+    public String cameraLibraryDownloadFailure() {
+        return CameraLibraryManager.failureMessage();
     }
 
     public boolean remotePreviewEnabled() {
@@ -184,39 +222,65 @@ public final class BitCamClientCoordinator implements AutoCloseable {
             return;
         }
 
-        try {
-            this.cameraCapture.start(
-                this.config.preferredCameraName(),
-                this.config.preferredCaptureMode(),
-                this.welcome.width(),
-                this.welcome.height(),
-                this.welcome.fps(),
-                this.welcome.quality(),
-                frame -> {
-                    this.previewStore.accept(frame);
-                    this.udpClient.sendFrame(this.playerIdSupplier.get(), frame, this.config.bubbleStyle());
-                }
-            );
-            this.lastCameraErrorMessage = "";
-            this.streamingEnabled = true;
-            this.config.setupCompleted(true);
-        } catch (RuntimeException exception) {
-            this.streamingEnabled = false;
-            this.previewStore.clear();
-            this.lastCameraErrorMessage = exception.getMessage() == null || exception.getMessage().isBlank()
-                ? "Failed to start camera streaming."
-                : exception.getMessage();
-            this.platform.logger().warn("Failed to start BitCam camera streaming: " + this.lastCameraErrorMessage);
-            this.platform.logger().error("BitCam camera start failure", exception);
+        this.cameraStarting = true;
+        ServerWelcomeSignalPacket welcomeSnapshot = this.welcome;
+        BitCamUdpClient udpClientSnapshot = this.udpClient;
+        this.cameraExecutor.submit(() -> {
+            try {
+                this.awaitCameraBackendReady();
+                this.cameraCapture.start(
+                    this.config.preferredCameraName(),
+                    this.config.preferredCaptureMode(),
+                    welcomeSnapshot.width(),
+                    welcomeSnapshot.height(),
+                    welcomeSnapshot.fps(),
+                    welcomeSnapshot.quality(),
+                    frame -> udpClientSnapshot.sendFrame(this.playerIdSupplier.get(), frame, this.config.bubbleStyle()),
+                    this.previewStore::accept
+                );
+                this.lastCameraErrorMessage = "";
+                this.streamingEnabled = true;
+                this.config.setupCompleted(true);
+            } catch (RuntimeException exception) {
+                this.streamingEnabled = false;
+                this.previewStore.clear();
+                this.lastCameraErrorMessage = exception.getMessage() == null || exception.getMessage().isBlank()
+                    ? "Failed to start camera streaming."
+                    : exception.getMessage();
+                this.platform.logger().warn("Failed to start BitCam camera streaming: " + this.lastCameraErrorMessage);
+                this.platform.logger().error("BitCam camera start failure", exception);
+            } finally {
+                this.cameraStarting = false;
+            }
+        });
+    }
+
+    private void awaitCameraBackendReady() {
+        while (CameraCatalog.isInitializing()) {
+            try {
+                Thread.sleep(100L);
+            } catch (InterruptedException exception) {
+                Thread.currentThread().interrupt();
+                throw new IllegalStateException("Interrupted while waiting for camera libraries.", exception);
+            }
+        }
+
+        if (!CameraLibraryManager.isReady()) {
+            String failureMessage = CameraLibraryManager.failureMessage();
+            if (!failureMessage.isBlank()) {
+                throw new IllegalStateException(failureMessage);
+            }
         }
     }
 
     private void stopStreaming() {
-        this.cameraCapture.stop();
-        this.previewStore.clear();
-        if (this.udpClient != null) {
-            this.udpClient.sendStop(this.playerIdSupplier.get());
-        }
+        this.cameraExecutor.submit(() -> {
+            this.cameraCapture.stop();
+            this.previewStore.clear();
+            if (this.udpClient != null) {
+                this.udpClient.sendStop(this.playerIdSupplier.get());
+            }
+        });
     }
 
     private void refreshCameraStreamingState() {
@@ -239,8 +303,10 @@ public final class BitCamClientCoordinator implements AutoCloseable {
 
     @Override
     public void close() {
+        this.cameraExecutor.shutdownNow();
         this.cameraCapture.close();
         this.previewStore.clear();
+        this.frameStore.close();
         this.availableQualityProfiles = List.of();
         this.selectedQualityProfileId = "";
         if (this.udpClient != null) {

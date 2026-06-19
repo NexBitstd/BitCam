@@ -34,6 +34,7 @@ import net.minecraft.client.gui.narration.NarrationElementOutput;
 import net.minecraft.client.gui.components.AbstractSliderButton;
 import net.minecraft.client.gui.components.AbstractWidget;
 import net.minecraft.client.gui.components.Button;
+import net.minecraft.client.gui.components.EditBox;
 import net.minecraft.client.gui.components.ObjectSelectionList;
 import net.minecraft.client.gui.components.StringWidget;
 import net.minecraft.client.gui.screens.Screen;
@@ -75,8 +76,10 @@ public final class BitCamSettingsScreen extends Screen {
     private Button topToggleStreamingButton;
     private Button togglePreviewButton;
     private Button topTogglePreviewButton;
+    private EditBox playerSearchField;
     private PlayerCameraList playerCameraList;
     private FlatSelectWidget<?> openSelect;
+    private boolean waitingForCameraInitialization;
     private int listRefreshCooldown;
 
     public BitCamSettingsScreen(Screen parent, BitCamClientCoordinator coordinator) {
@@ -98,8 +101,10 @@ public final class BitCamSettingsScreen extends Screen {
         this.topToggleStreamingButton = null;
         this.togglePreviewButton = null;
         this.topTogglePreviewButton = null;
+        this.playerSearchField = null;
         this.playerCameraList = null;
         this.openSelect = null;
+        this.waitingForCameraInitialization = this.coordinator.isCameraInitializing();
         this.addCommonWidgets();
 
         switch (this.activeTab) {
@@ -113,11 +118,19 @@ public final class BitCamSettingsScreen extends Screen {
 
     @Override
     public void tick() {
+        if (this.waitingForCameraInitialization && !this.coordinator.isCameraInitializing()) {
+            this.waitingForCameraInitialization = false;
+            this.init();
+            return;
+        }
+
         if (this.toggleStreamingButton != null) {
             this.toggleStreamingButton.setMessage(this.streamingLabel());
+            this.toggleStreamingButton.active = !this.cameras.isEmpty() && !this.coordinator.isCameraStarting();
         }
         if (this.topToggleStreamingButton != null) {
             this.topToggleStreamingButton.setMessage(this.streamingLabel());
+            this.topToggleStreamingButton.active = !this.cameras.isEmpty() && !this.coordinator.isCameraStarting();
         }
         if (this.togglePreviewButton != null) {
             this.togglePreviewButton.setMessage(this.remotePreviewLabel());
@@ -531,17 +544,32 @@ public final class BitCamSettingsScreen extends Screen {
     }
 
     private void addPlayersTabWidgets() {
+        int innerLeft = this.playersPanelLeft() + 14;
+        int innerWidth = this.playersPanelWidth() - 28;
+        int searchY = CONTENT_TOP + 8;
+
+        EditBox searchField = new EditBox(this.font, innerLeft + 1, searchY + 1, innerWidth - 2, 18, Component.empty());
+        searchField.setMaxLength(48);
+        searchField.setBordered(false);
+        searchField.setTextColor(0xFFECF0F4);
+        searchField.setHint(Component.translatable("screen.bitcam.players.search"));
+        searchField.setResponder(query -> {
+            if (this.playerCameraList != null) {
+                this.playerCameraList.updateSearch(query.trim().toLowerCase());
+            }
+        });
+        this.playerSearchField = this.addRenderableWidget(searchField);
+
         if (!this.hasOtherPlayers()) {
             this.listRefreshCooldown = 0;
             return;
         }
 
-        int listLeft = this.playersListLeft();
-        int listTop = CONTENT_TOP + 58;
-        int listWidth = this.playersListWidth();
-        int listBottom = this.height - 64;
-
-        this.playerCameraList = this.addRenderableWidget(new PlayerCameraList(this.client, listLeft, listWidth, listBottom, listTop, ROW_HEIGHT));
+        int listTop = CONTENT_TOP + 36;
+        int listBottom = this.height - 54;
+        this.playerCameraList = this.addRenderableWidget(
+            new PlayerCameraList(this.client, innerLeft, innerWidth, listBottom, listTop, 26)
+        );
         this.playerCameraList.refreshEntries();
         this.listRefreshCooldown = 20;
     }
@@ -738,12 +766,12 @@ public final class BitCamSettingsScreen extends Screen {
         return Math.max(188, this.height - this.previewStageY() - STAGE_BOTTOM_PADDING);
     }
 
-    private int playersListWidth() {
-        return Math.min(430, this.width - (SIDE_PADDING * 4));
+    private int playersPanelWidth() {
+        return this.width - (SIDE_PADDING * 2) + 16;
     }
 
-    private int playersListLeft() {
-        return (this.width - this.playersListWidth()) / 2;
+    private int playersPanelLeft() {
+        return SIDE_PADDING - 8;
     }
 
     private void refreshPreviewSource() {
@@ -813,11 +841,13 @@ public final class BitCamSettingsScreen extends Screen {
         int barWidth = this.width - (SIDE_PADDING * 2) + 16;
         guiGraphics.fill(barX, TOP_BAR_Y, barX + barWidth, TOP_BAR_Y + TOP_BAR_HEIGHT, 0xB51E2228);
         guiGraphics.fill(barX, TOP_BAR_Y + TOP_BAR_HEIGHT, barX + barWidth, TOP_BAR_Y + TOP_BAR_HEIGHT + 1, 0x804A5058);
-        guiGraphics.fill(barX, TOP_BAR_Y + TOP_BAR_HEIGHT + 1, barX + barWidth, this.height - 24, 0x18000000);
+        guiGraphics.fill(barX, TOP_BAR_Y + TOP_BAR_HEIGHT + 1, barX + barWidth, this.height - 24, this.activeTab == Tab.PLAYERS ? 0x60000000 : 0x18000000);
 
-        int columnLeft = this.settingsColumnLeft() - 18;
-        int columnRight = this.settingsColumnRight() + 18;
-        guiGraphics.fill(columnLeft, CONTENT_TOP - 12, columnRight, this.height - 46, 0x14000000);
+        if (this.activeTab != Tab.PLAYERS) {
+            int columnLeft = this.settingsColumnLeft() - 18;
+            int columnRight = this.settingsColumnRight() + 18;
+            guiGraphics.fill(columnLeft, CONTENT_TOP - 12, columnRight, this.height - 46, 0x14000000);
+        }
     }
 
     private void renderChromeForeground(GuiGraphics guiGraphics) {
@@ -835,9 +865,10 @@ public final class BitCamSettingsScreen extends Screen {
                 this.drawSectionTitle(guiGraphics, Component.translatable("screen.bitcam.section.bubble_transform"), CONTENT_TOP + 134);
             }
             case PLAYERS -> {
-                this.renderPlayersPanelHeader(guiGraphics);
                 if (!this.hasOtherPlayers()) {
                     this.renderPlayersEmptyState(guiGraphics);
+                } else if (this.playerCameraList != null && this.playerCameraList.children().isEmpty()) {
+                    this.renderPlayersNoResults(guiGraphics);
                 }
             }
         }
@@ -1106,19 +1137,29 @@ public final class BitCamSettingsScreen extends Screen {
     }
 
     private void renderPlayersPanel(GuiGraphics guiGraphics) {
-        int panelX = this.playersListLeft() - 14;
-        int panelY = CONTENT_TOP + 42;
-        int panelWidth = this.playersListWidth() + 28;
-        int panelHeight = this.height - panelY - 54;
+        int panelX = this.playersPanelLeft();
+        int panelY = CONTENT_TOP - 2;
+        int panelWidth = this.playersPanelWidth();
+        int panelHeight = this.height - panelY - 46;
 
-        guiGraphics.fill(panelX, panelY, panelX + panelWidth, panelY + panelHeight, 0x17000000);
-        guiGraphics.fill(panelX, panelY, panelX + panelWidth, panelY + 1, 0x6B4D535C);
-    }
+        // Panel background + top accent line
+        guiGraphics.fill(panelX, panelY, panelX + panelWidth, panelY + panelHeight, 0x75101820);
+        guiGraphics.fill(panelX, panelY, panelX + panelWidth, panelY + 1, 0x604A5260);
 
-    private void renderPlayersPanelHeader(GuiGraphics guiGraphics) {
-        int centerX = this.playersListLeft() + (this.playersListWidth() / 2);
-        guiGraphics.drawCenteredString(this.font, Component.translatable("screen.bitcam.players.panel_title"), centerX, CONTENT_TOP + 6, 0xEDF0F3);
-        guiGraphics.drawCenteredString(this.font, Component.translatable("screen.bitcam.players.panel_subtitle"), centerX, CONTENT_TOP + 20, 0xA9B2BE);
+        // List area tint (below separator)
+        guiGraphics.fill(panelX, CONTENT_TOP + 33, panelX + panelWidth, panelY + panelHeight, 0x25000000);
+
+        // Search field background
+        int searchLeft = panelX + 14;
+        int searchWidth = panelWidth - 28;
+        int searchY = CONTENT_TOP + 8;
+        boolean searchFocused = this.playerSearchField != null && this.playerSearchField.isFocused();
+        int searchBorder = searchFocused ? 0xFF747C87 : 0xFF484E57;
+        guiGraphics.fill(searchLeft, searchY, searchLeft + searchWidth, searchY + 20, searchBorder);
+        guiGraphics.fill(searchLeft + 1, searchY + 1, searchLeft + searchWidth - 1, searchY + 19, 0xB2262A31);
+
+        // Separator
+        guiGraphics.fill(panelX + 8, CONTENT_TOP + 32, panelX + panelWidth - 8, CONTENT_TOP + 33, 0x704A5260);
     }
 
     private void renderInitialSetupPrompt(GuiGraphics guiGraphics) {
@@ -1142,6 +1183,32 @@ public final class BitCamSettingsScreen extends Screen {
     }
 
     private void renderCameraStatus(GuiGraphics guiGraphics) {
+        int left = this.contentLabelX();
+        int top = this.coordinator.needsInitialSetup() ? CONTENT_TOP + 304 : CONTENT_TOP + 246;
+        int width = (this.contentControlX() + this.contentControlWidth()) - left;
+
+        if (this.coordinator.isDownloadingCameraLibraries()) {
+            int pct = this.coordinator.cameraLibraryDownloadProgress();
+            String label = Component.translatable("screen.bitcam.camera.libs_downloading", pct).getString();
+            guiGraphics.drawString(this.font, label, left, top, 0x80C8FF, false);
+            // Progress bar
+            int barY = top + 12;
+            int barWidth = width;
+            guiGraphics.fill(left, barY, left + barWidth, barY + 4, 0x40FFFFFF);
+            guiGraphics.fill(left, barY, left + Math.round(barWidth * pct / 100f), barY + 4, 0xFF80C8FF);
+            return;
+        }
+
+        String failureMessage = this.coordinator.cameraLibraryDownloadFailure();
+        if (!failureMessage.isBlank()) {
+            for (FormattedCharSequence line : this.font.split(
+                Component.translatable("screen.bitcam.camera.libs_failed", failureMessage), width)) {
+                guiGraphics.drawString(this.font, line, left, top, 0xE0A7AB, false);
+                top += 10;
+            }
+            return;
+        }
+
         String statusMessage = this.coordinator.cameraStatusMessage();
         if (statusMessage.isBlank() && !this.cameras.isEmpty()) {
             return;
@@ -1151,11 +1218,7 @@ public final class BitCamSettingsScreen extends Screen {
             statusMessage = Component.translatable("screen.bitcam.camera.none").getString();
         }
 
-        int left = this.contentLabelX();
-        int top = this.coordinator.needsInitialSetup() ? CONTENT_TOP + 304 : CONTENT_TOP + 246;
-        int width = (this.contentControlX() + this.contentControlWidth()) - left;
         int color = this.cameras.isEmpty() ? 0xE0A7AB : 0xA9B2BE;
-
         for (FormattedCharSequence line : this.font.split(Component.literal(statusMessage), width)) {
             guiGraphics.drawString(this.font, line, left, top, color, false);
             top += 10;
@@ -1163,26 +1226,16 @@ public final class BitCamSettingsScreen extends Screen {
     }
 
     private void renderPlayersEmptyState(GuiGraphics guiGraphics) {
-        int panelX = this.playersListLeft();
-        int panelY = CONTENT_TOP + 58;
-        int panelWidth = this.playersListWidth();
-        int panelHeight = this.height - panelY - 64;
-        int centerX = panelX + (panelWidth / 2);
-        int centerY = panelY + (panelHeight / 2) - 10;
-        guiGraphics.drawCenteredString(
-            this.font,
-            Component.translatable("screen.bitcam.players.empty"),
-            centerX,
-            centerY,
-            0xA9B2BE
-        );
-        guiGraphics.drawCenteredString(
-            this.font,
-            Component.translatable("screen.bitcam.players.empty_hint"),
-            centerX,
-            centerY + 14,
-            0x798494
-        );
+        int centerX = this.playersPanelLeft() + this.playersPanelWidth() / 2;
+        int centerY = (CONTENT_TOP + 36 + this.height - 54) / 2 - 10;
+        guiGraphics.drawCenteredString(this.font, Component.translatable("screen.bitcam.players.empty"), centerX, centerY, 0xA9B2BE);
+        guiGraphics.drawCenteredString(this.font, Component.translatable("screen.bitcam.players.empty_hint"), centerX, centerY + 14, 0x798494);
+    }
+
+    private void renderPlayersNoResults(GuiGraphics guiGraphics) {
+        int centerX = this.playersPanelLeft() + this.playersPanelWidth() / 2;
+        int centerY = (CONTENT_TOP + 36 + this.height - 54) / 2 - 4;
+        guiGraphics.drawCenteredString(this.font, Component.translatable("screen.bitcam.players.no_results"), centerX, centerY, 0x798494);
     }
 
     private boolean hasOtherPlayers() {
@@ -1202,6 +1255,9 @@ public final class BitCamSettingsScreen extends Screen {
     }
 
     private Component streamingLabel() {
+        if (this.coordinator.isCameraStarting()) {
+            return Component.translatable("screen.bitcam.camera.streaming_starting");
+        }
         return Component.translatable(
             this.coordinator.streamingEnabled() ? "screen.bitcam.camera.streaming_disable" : "screen.bitcam.camera.streaming_enable"
         );
@@ -1519,19 +1575,32 @@ public final class BitCamSettingsScreen extends Screen {
 
     private final class PlayerCameraList extends ObjectSelectionList<PlayerCameraList.Entry> {
         private final int leftPos;
+        private String searchQuery = "";
 
         private PlayerCameraList(Minecraft minecraft, int leftPos, int width, int bottom, int top, int itemHeight) {
             super(minecraft, width, bottom, top, itemHeight);
             this.leftPos = leftPos;
         }
 
+        private void updateSearch(String query) {
+            this.searchQuery = query == null ? "" : query;
+            this.refreshEntries();
+        }
+
         private void refreshEntries() {
             this.clearEntries();
-
             for (AbstractClientPlayer player : BitCamSettingsScreen.this.otherPlayers()) {
-                this.addEntry(new Entry(player.getUUID(), player.getName().getString()));
+                if (this.searchQuery.isEmpty() || player.getName().getString().toLowerCase().contains(this.searchQuery)) {
+                    this.addEntry(new Entry(player));
+                }
             }
         }
+
+        @Override
+        protected void renderListBackground(GuiGraphics guiGraphics) {}
+
+        @Override
+        protected void renderListSeparators(GuiGraphics guiGraphics) {}
 
         protected int getScrollbarPosition() {
             return this.leftPos + this.width - 6;
@@ -1546,12 +1615,14 @@ public final class BitCamSettingsScreen extends Screen {
         }
 
         private final class Entry extends ObjectSelectionList.Entry<Entry> {
+            private final AbstractClientPlayer player;
             private final UUID playerId;
             private final String playerName;
 
-            private Entry(UUID playerId, String playerName) {
-                this.playerId = playerId;
-                this.playerName = playerName;
+            private Entry(AbstractClientPlayer player) {
+                this.player = player;
+                this.playerId = player.getUUID();
+                this.playerName = player.getName().getString();
             }
 
             @Override
@@ -1568,19 +1639,44 @@ public final class BitCamSettingsScreen extends Screen {
                 float partialTick
             ) {
                 boolean hidden = BitCamSettingsScreen.this.coordinator.isPlayerHidden(this.playerId);
-                int rowColor = hovering ? 0x6B333841 : 0x4A23272D;
-                int pillColor = hidden ? 0x994A3135 : 0x99324538;
-                int stateColor = hidden ? 0xFFE5A2AA : 0xFFAFD7B8;
-                Component state = Component.translatable(hidden ? "screen.bitcam.players.hidden" : "screen.bitcam.players.visible");
 
-                guiGraphics.fill(left, top, left + width, top + height - 1, rowColor);
-                guiGraphics.fill(left, top + height - 1, left + width, top + height, 0x4F474D55);
-                guiGraphics.drawString(BitCamSettingsScreen.this.font, this.playerName, left + 8, top + 6, 0xFFFFFF, false);
+                // Row background
+                guiGraphics.fill(left, top, left + width, top + height - 1, hovering ? 0x60384450 : 0x35202C38);
+                guiGraphics.fill(left, top + height - 1, left + width, top + height, 0x55404E5C);
 
-                int stateWidth = BitCamSettingsScreen.this.font.width(state);
-                int pillLeft = left + width - stateWidth - 18;
-                guiGraphics.fill(pillLeft - 6, top + 4, left + width - 8, top + 18, pillColor);
-                guiGraphics.drawString(BitCamSettingsScreen.this.font, state, pillLeft, top + 7, stateColor, false);
+                // Player head — face layer + hat overlay (8×8 UV → 16×16 display)
+                int headSize = 16;
+                int headX = left + 6;
+                int headY = top + (height - headSize) / 2;
+                ResourceLocation skin = this.player.getSkin().texture();
+                guiGraphics.blit(RenderPipelines.GUI_TEXTURED, skin, headX, headY, headSize, headSize, 8, 8, 8, 8, 64, 64);
+                guiGraphics.blit(RenderPipelines.GUI_TEXTURED, skin, headX, headY, headSize, headSize, 40, 8, 8, 8, 64, 64);
+
+                // Player name
+                int nameX = headX + headSize + 8;
+                int nameY = top + (height - 8) / 2;
+                int btnWidth = 80;
+                int maxNameWidth = width - headSize - 14 - btnWidth - 18;
+                String displayName = BitCamSettingsScreen.this.ellipsize(Component.literal(this.playerName), maxNameWidth).getString();
+                guiGraphics.drawString(BitCamSettingsScreen.this.font, displayName, nameX, nameY, hovering ? 0xFFFFFFFF : 0xFFD8DDE4, false);
+
+                // Toggle button
+                int btnHeight = 16;
+                int btnX = left + width - btnWidth - 6;
+                int btnY = top + (height - btnHeight) / 2;
+                boolean btnHovered = mouseX >= btnX && mouseX < btnX + btnWidth && mouseY >= btnY && mouseY < btnY + btnHeight;
+
+                int borderColor = hidden
+                    ? (btnHovered ? 0xFFB48D95 : 0xFF88636B)
+                    : (btnHovered ? 0xFF8BD69B : 0xFF5DAA72);
+                int fillColor = hidden ? 0xB0432B30 : 0xB02C4D36;
+                int textColor = hidden ? 0xFFFFE8EC : 0xFFE7FFF0;
+                Component btnLabel = Component.translatable(hidden ? "screen.bitcam.players.hidden" : "screen.bitcam.players.visible");
+
+                guiGraphics.fill(btnX, btnY, btnX + btnWidth, btnY + btnHeight, borderColor);
+                guiGraphics.fill(btnX + 1, btnY + 1, btnX + btnWidth - 1, btnY + btnHeight - 1, fillColor);
+                guiGraphics.fill(btnX + 1, btnY + btnHeight - 2, btnX + btnWidth - 1, btnY + btnHeight - 1, btnHovered ? 0x907A818A : 0x5040474F);
+                guiGraphics.drawCenteredString(BitCamSettingsScreen.this.font, btnLabel, btnX + btnWidth / 2, btnY + (btnHeight - 8) / 2, textColor);
             }
 
             @Override
@@ -1590,7 +1686,6 @@ public final class BitCamSettingsScreen extends Screen {
                     BitCamSettingsScreen.this.coordinator.setPlayerHidden(this.playerId, !hidden);
                     return true;
                 }
-
                 return false;
             }
 
