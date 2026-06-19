@@ -142,7 +142,11 @@ public final class CameraCatalog {
 
         for (CameraBackend candidate : candidateBackends(failures)) {
             try {
-                candidate.listDevices();
+                List<CameraDeviceInfo> devices = candidate.listDevices();
+                if (devices.isEmpty()) {
+                    failures.add(candidate.backendName() + ": no camera devices were reported");
+                    continue;
+                }
                 return candidate;
             } catch (Throwable throwable) {
                 failures.add(candidate.backendName() + ": " + summarize(throwable));

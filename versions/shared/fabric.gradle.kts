@@ -56,6 +56,10 @@ val javaCvBundledLibraries = listOf(
     "org.bytedeco:javacpp:$javacvVersion",
     "org.bytedeco:ffmpeg:$ffmpegVersion"
 )
+val webcamCaptureLibraries = listOf(
+    "com.github.sarxos:webcam-capture:0.3.12",
+    "com.nativelibs4java:bridj:0.7.0"
+)
 val javaCvNativeRuntimeLibraries = bytedecoDesktopClassifiers.flatMap { classifier ->
     listOf(
         "org.bytedeco:javacpp:$javacvVersion:$classifier",
@@ -134,8 +138,10 @@ dependencies {
     add("clientImplementation", clientCommonProject)
     add("clientImplementation", serverCommonProject)
 
-    implementation("com.github.sarxos:webcam-capture:0.3.12")
-    add("include", "com.github.sarxos:webcam-capture:0.3.12")
+    webcamCaptureLibraries.forEach { notation ->
+        implementation(notation)
+        add("include", notation)
+    }
     add("include", "com.electronwill.night-config:toml:3.6.7")
     add("include", "com.electronwill.night-config:core:3.6.7")
     javaCvBundledLibraries.forEach { notation ->
