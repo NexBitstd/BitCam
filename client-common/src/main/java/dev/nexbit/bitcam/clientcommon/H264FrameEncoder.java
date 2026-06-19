@@ -132,6 +132,8 @@ final class H264FrameEncoder implements FrameEncoder {
         // Native libs are platform-specific and may have been downloaded at runtime — make sure this
         // thread's context classloader can locate them before touching any FFmpeg class.
         CameraLibraryManager.applyToThread();
+        FFmpegFrameRecorder.tryLoad();
+        CameraLibraryManager.configureFfmpegLoggingAfterLoad();
 
         FFmpegFrameRecorder created = new FFmpegFrameRecorder(this.sink, targetWidth, targetHeight, 0);
         created.setFormat("h264");

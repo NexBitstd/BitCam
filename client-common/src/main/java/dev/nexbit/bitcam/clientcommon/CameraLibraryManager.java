@@ -5,12 +5,18 @@ import java.io.InputStream;
 import java.io.OutputStream;
 import java.net.HttpURLConnection;
 import java.net.URI;
-import java.net.URL;
-import java.net.URLClassLoader;
+import java.io.File;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
+import java.nio.file.StandardCopyOption;
+import java.util.ArrayList;
+import java.util.LinkedHashSet;
 import java.util.Locale;
+import java.util.jar.JarEntry;
+import java.util.jar.JarInputStream;
+import org.bytedeco.ffmpeg.global.avutil;
+import org.bytedeco.javacv.FFmpegLogCallback;
 
 /**
  * Detects whether the platform-specific JavaCV/FFmpeg native JARs are already on the classpath
@@ -42,7 +48,8 @@ public final class CameraLibraryManager {
     private static volatile Status status = Status.CHECKING;
     private static volatile String failureMessage = "";
     private static volatile int downloadProgressPercent = 0;
-    private static volatile URLClassLoader nativeLoader;
+    private static volatile Path ffmpegExecutable;
+    private static volatile boolean ffmpegLoggingConfigured;
 
     private CameraLibraryManager() {}
 
@@ -89,7 +96,7 @@ public final class CameraLibraryManager {
             Path ffmpegJar = libsDir.resolve("ffmpeg-" + FFMPEG_VERSION + "-" + ffmpegClassifier + ".jar");
 
             if (Files.exists(javacppJar) && Files.exists(ffmpegJar)) {
-                buildLoader(javacppJar, ffmpegJar);
+                configureDownloadedLibraries(libsDir, javacppJar, ffmpegJar, classifier, ffmpegClassifier);
                 status = Status.READY;
                 downloadProgressPercent = 100;
                 return;
@@ -116,7 +123,7 @@ public final class CameraLibraryManager {
                 "ffmpeg-" + FFMPEG_VERSION + "-" + ffmpegClassifier + ".jar",
                 10, 98);
 
-            buildLoader(javacppJar, ffmpegJar);
+            configureDownloadedLibraries(libsDir, javacppJar, ffmpegJar, classifier, ffmpegClassifier);
             status = Status.READY;
             downloadProgressPercent = 100;
         } catch (Exception exception) {
@@ -128,14 +135,22 @@ public final class CameraLibraryManager {
     }
 
     /**
-     * Sets the downloaded native JARs as the context classloader on the current thread
-     * so JavaCPP can find and extract native libraries from them.
-     * Only has effect when natives were downloaded (not when bundled).
+     * Kept as the common pre-FFmpeg hook for callers. Downloaded native libraries are exposed through
+     * JavaCPP path properties because JavaCPP resolves resources through the FFmpeg classloader.
      */
     public static void applyToThread() {
-        URLClassLoader loader = nativeLoader;
-        if (loader != null) {
-            Thread.currentThread().setContextClassLoader(loader);
+    }
+
+    public static void configureFfmpegLoggingAfterLoad() {
+        if (ffmpegLoggingConfigured) {
+            return;
+        }
+        try {
+            FFmpegLogCallback.set();
+            FFmpegLogCallback.setLevel(avutil.AV_LOG_ERROR);
+            ffmpegLoggingConfigured = true;
+        } catch (Throwable ignored) {
+            // Logging setup is optional; never let it poison camera startup.
         }
     }
 
@@ -154,6 +169,10 @@ public final class CameraLibraryManager {
         return detectClassifier() + FFMPEG_PLATFORM_EXTENSION;
     }
 
+    public static Path ffmpegExecutablePath() {
+        return ffmpegExecutable;
+    }
+
     private static boolean isNativeOnClasspath() {
         String ffmpegClassifier = detectFfmpegClassifier();
         boolean isWindows = ffmpegClassifier.startsWith("windows");
@@ -164,12 +183,90 @@ public final class CameraLibraryManager {
             || CameraLibraryManager.class.getClassLoader().getResource(resource) != null;
     }
 
-    private static void buildLoader(Path javacppJar, Path ffmpegJar) throws Exception {
-        ClassLoader parent = Thread.currentThread().getContextClassLoader();
-        nativeLoader = new URLClassLoader(
-            new URL[]{javacppJar.toUri().toURL(), ffmpegJar.toUri().toURL()},
-            parent
+    private static void configureDownloadedLibraries(
+        Path libsDir,
+        Path javacppJar,
+        Path ffmpegJar,
+        String classifier,
+        String ffmpegClassifier
+    ) throws IOException {
+        Path extractedDir = libsDir.resolve("extracted");
+        Path javacppNativeDir = extractNativeDirectory(
+            javacppJar,
+            extractedDir.resolve(stripJarSuffix(javacppJar.getFileName().toString())),
+            "org/bytedeco/javacpp/" + classifier + "/"
         );
+        Path ffmpegNativeDir = extractNativeDirectory(
+            ffmpegJar,
+            extractedDir.resolve(stripJarSuffix(ffmpegJar.getFileName().toString())),
+            "org/bytedeco/ffmpeg/" + ffmpegClassifier + "/"
+        );
+
+        String nativePaths = javacppNativeDir.toAbsolutePath()
+            + File.pathSeparator
+            + ffmpegNativeDir.toAbsolutePath();
+        prependPathProperty("platform.preloadpath", nativePaths);
+        prependPathProperty("platform.linkpath", nativePaths);
+
+        Path executable = ffmpegNativeDir.resolve(ffmpegClassifier.startsWith("windows") ? "ffmpeg.exe" : "ffmpeg");
+        if (Files.isRegularFile(executable)) {
+            executable.toFile().setExecutable(true, false);
+            ffmpegExecutable = executable;
+        }
+    }
+
+    private static Path extractNativeDirectory(Path jar, Path targetDir, String entryPrefix) throws IOException {
+        Path marker = targetDir.resolve(".complete");
+        if (Files.exists(marker)) {
+            return targetDir;
+        }
+
+        Files.createDirectories(targetDir);
+        try (JarInputStream input = new JarInputStream(Files.newInputStream(jar))) {
+            JarEntry entry;
+            while ((entry = input.getNextJarEntry()) != null) {
+                if (entry.isDirectory() || !entry.getName().startsWith(entryPrefix)) {
+                    continue;
+                }
+                String relativeName = entry.getName().substring(entryPrefix.length());
+                if (relativeName.isBlank()) {
+                    continue;
+                }
+                Path output = targetDir.resolve(relativeName).normalize();
+                if (!output.startsWith(targetDir)) {
+                    continue;
+                }
+                Files.createDirectories(output.getParent());
+                Files.copy(input, output, StandardCopyOption.REPLACE_EXISTING);
+                output.toFile().setExecutable(true, false);
+            }
+        }
+        Files.writeString(marker, "ok", StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING);
+        return targetDir;
+    }
+
+    private static void prependPathProperty(String key, String paths) {
+        LinkedHashSet<String> values = new LinkedHashSet<>();
+        for (String path : paths.split(File.pathSeparator)) {
+            if (!path.isBlank()) {
+                values.add(path);
+            }
+        }
+
+        String existing = System.getProperty(key, "");
+        if (!existing.isBlank()) {
+            for (String path : existing.split(File.pathSeparator)) {
+                if (!path.isBlank()) {
+                    values.add(path);
+                }
+            }
+        }
+
+        System.setProperty(key, String.join(File.pathSeparator, new ArrayList<>(values)));
+    }
+
+    private static String stripJarSuffix(String fileName) {
+        return fileName.endsWith(".jar") ? fileName.substring(0, fileName.length() - 4) : fileName;
     }
 
     private static Path download(

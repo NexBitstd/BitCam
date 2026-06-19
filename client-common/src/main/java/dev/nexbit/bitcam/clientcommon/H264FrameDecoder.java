@@ -62,10 +62,13 @@ final class H264FrameDecoder implements FrameDecoder {
 
     private void runGrabLoop() {
         CameraLibraryManager.applyToThread();
-        FFmpegFrameGrabber grabber = new FFmpegFrameGrabber(this.input);
-        grabber.setFormat("h264");
+        FFmpegFrameGrabber grabber = null;
         Java2DFrameConverter converter = new Java2DFrameConverter();
         try {
+            FFmpegFrameGrabber.tryLoad();
+            CameraLibraryManager.configureFfmpegLoggingAfterLoad();
+            grabber = new FFmpegFrameGrabber(this.input);
+            grabber.setFormat("h264");
             grabber.start();
             while (!this.closed) {
                 Frame frame = grabber.grabImage();
@@ -85,13 +88,15 @@ final class H264FrameDecoder implements FrameDecoder {
                     image, meta.frameId(), meta.captureTimeMillis(), meta.sourceWidth(), meta.sourceHeight(), meta.bubbleStyle()
                 ));
             }
-        } catch (Exception ignored) {
+        } catch (Throwable ignored) {
             // A grabber failure ends decoding; the stream is rebuilt on the next keyframe.
         } finally {
-            try {
-                grabber.close();
-            } catch (Exception ignored) {
-                // Best-effort.
+            if (grabber != null) {
+                try {
+                    grabber.close();
+                } catch (Exception ignored) {
+                    // Best-effort.
+                }
             }
             converter.close();
         }

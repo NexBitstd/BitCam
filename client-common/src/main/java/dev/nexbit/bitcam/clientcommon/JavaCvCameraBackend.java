@@ -59,7 +59,7 @@ public final class JavaCvCameraBackend implements CameraBackend {
             }
         }
 
-        FFmpegFrameGrabber.tryLoad();
+        ensureFfmpegReady();
         List<CameraDeviceInfo> devices = enumerateViaFfmpegCli();
         this.cachedDevices = List.copyOf(devices);
         this.scanCompleted = true;
@@ -75,7 +75,7 @@ public final class JavaCvCameraBackend implements CameraBackend {
 
     @Override
     public List<CameraCaptureMode> listModes(String preferredCameraId) throws FrameGrabber.Exception {
-        FFmpegFrameGrabber.tryLoad();
+        ensureFfmpegReady();
         String deviceId = resolveDeviceId(preferredCameraId);
         if (deviceId.isBlank()) {
             return List.of();
@@ -86,7 +86,7 @@ public final class JavaCvCameraBackend implements CameraBackend {
 
     @Override
     public CameraCaptureSession openSession(String preferredCameraId, CameraCaptureMode requestedMode) throws FrameGrabber.Exception {
-        FFmpegFrameGrabber.tryLoad();
+        ensureFfmpegReady();
 
         String deviceId = resolveDeviceId(preferredCameraId);
         if (deviceId.isBlank()) {
@@ -123,6 +123,12 @@ public final class JavaCvCameraBackend implements CameraBackend {
         this.cachedModes.clear();
         this.cachedFailureMessage = "";
         this.scanCompleted = false;
+    }
+
+    private static void ensureFfmpegReady() throws FrameGrabber.Exception {
+        CameraLibraryManager.applyToThread();
+        FFmpegFrameGrabber.tryLoad();
+        CameraLibraryManager.configureFfmpegLoggingAfterLoad();
     }
 
     // --- Device enumeration ---
@@ -505,7 +511,13 @@ public final class JavaCvCameraBackend implements CameraBackend {
             return configured;
         }
 
-        // 2. Use the FFmpeg executable bundled with JavaCV — works without any system install.
+        // 2. Use the FFmpeg executable extracted from downloaded platform natives.
+        Path downloaded = CameraLibraryManager.ffmpegExecutablePath();
+        if (downloaded != null && Files.isExecutable(downloaded)) {
+            return downloaded.toAbsolutePath().toString();
+        }
+
+        // 3. Use the FFmpeg executable bundled with JavaCV — works without any system install.
         //    Loader.load() extracts the platform binary to a temp cache and returns its path.
         try {
             String bundled = Loader.load(ffmpeg.class);
@@ -515,7 +527,7 @@ public final class JavaCvCameraBackend implements CameraBackend {
         } catch (Exception ignored) {
         }
 
-        // 3. Fall back to a system-installed ffmpeg in PATH
+        // 4. Fall back to a system-installed ffmpeg in PATH
         String executableName = IS_WINDOWS ? "ffmpeg.exe" : "ffmpeg";
         String pathEnv = System.getenv("PATH");
         if (pathEnv != null && !pathEnv.isBlank()) {
