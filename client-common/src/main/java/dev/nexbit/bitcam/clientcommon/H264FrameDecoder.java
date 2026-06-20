@@ -86,6 +86,14 @@ final class H264FrameDecoder implements FrameDecoder {
             CameraLibraryManager.configureFfmpegLoggingAfterLoad();
             grabber = new FFmpegFrameGrabber(this.input);
             grabber.setFormat("h264");
+            // Without these, avformat_find_stream_info() buffers seconds of a thin talking-head stream
+            // before start() returns — long enough for the jitter buffer to be pruned and the decoder
+            // torn down before it emits a single frame. The keyframe already carries SPS/PPS, so the
+            // demuxer needs almost no data to lock on; decode with minimal startup latency.
+            grabber.setOption("probesize", "32");
+            grabber.setOption("analyzeduration", "0");
+            grabber.setOption("fflags", "nobuffer");
+            grabber.setOption("flags", "low_delay");
             grabber.start();
             this.lifecycleLog.accept("FFmpeg grabber initialised, awaiting decoded frames");
             while (!this.closed) {

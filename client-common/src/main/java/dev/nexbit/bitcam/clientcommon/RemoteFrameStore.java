@@ -162,7 +162,10 @@ public final class RemoteFrameStore implements AutoCloseable {
     public void pruneExpired(long maxAgeMillis) {
         long cutoff = System.currentTimeMillis() - maxAgeMillis;
         this.streams.values().removeIf(stream -> {
-            if (stream.playout.lastOfferMillis() >= cutoff) {
+            // Keyed on the last frame *received*, not decoded: a decoder that takes a moment to spin up
+            // (FFmpeg grabber start) must not be torn down for "no decoded frames yet" while fragments
+            // are still arriving — tearing it down only restarts that slow spin-up forever.
+            if (stream.lastFrameReceivedMillis >= cutoff) {
                 return false;
             }
             stream.close();
@@ -233,6 +236,9 @@ public final class RemoteFrameStore implements AutoCloseable {
     private final class RemoteStream implements AutoCloseable {
         private final UUID streamerId;
         private final RemoteStreamPlayout playout = new RemoteStreamPlayout();
+        // Wall-clock of the last assembled frame handed to this stream; drives pruning so a slow-starting
+        // decoder isn't killed while data is still flowing.
+        private volatile long lastFrameReceivedMillis = System.currentTimeMillis();
         private FrameDecoder decoder;
         private BitCamVideoCodec codec;
         private int lastFrameId = -1;
@@ -249,6 +255,7 @@ public final class RemoteFrameStore implements AutoCloseable {
         }
 
         void decode(RemoteFrame frame) {
+            this.lastFrameReceivedMillis = System.currentTimeMillis();
             this.accountReception(frame);
             if (frame.codec() == BitCamVideoCodec.H264 && !this.decoderGivenUp) {
                 this.trackKeyframeNeed(frame);
