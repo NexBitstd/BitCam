@@ -11,6 +11,23 @@ final class VideoFrameSupport {
     private VideoFrameSupport() {
     }
 
+    /**
+     * Deep copy of a captured frame so it can be handed to another thread. The capture backend's
+     * {@link java.awt.image.BufferedImage} is a converter-owned buffer reused on every grab, so the
+     * network encode thread must work on its own copy or it would read a half-overwritten frame.
+     */
+    static BufferedImage copy(BufferedImage source) {
+        int type = source.getType() == BufferedImage.TYPE_CUSTOM ? BufferedImage.TYPE_INT_RGB : source.getType();
+        BufferedImage target = new BufferedImage(source.getWidth(), source.getHeight(), type);
+        Graphics2D graphics = target.createGraphics();
+        try {
+            graphics.drawImage(source, 0, 0, null);
+        } finally {
+            graphics.dispose();
+        }
+        return target;
+    }
+
     /** Scales {@code source} to the requested size, returning it unchanged when already correct. */
     static BufferedImage scale(BufferedImage source, int targetWidth, int targetHeight) {
         if (source.getWidth() == targetWidth && source.getHeight() == targetHeight) {

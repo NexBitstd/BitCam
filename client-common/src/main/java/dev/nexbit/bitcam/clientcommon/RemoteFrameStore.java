@@ -210,6 +210,15 @@ public final class RemoteFrameStore implements AutoCloseable {
         );
     }
 
+    // One-shot decoder lifecycle line per stream restart. With the stream torn down every ~10s when no
+    // frame decodes, the cadence itself is the signal: "received first keyframe" without a following
+    // "decoded first frame" points at the grabber; no keyframe line at all points at delivery upstream.
+    private void noteDecoderDiagnostic(UUID streamerId, String message) {
+        if (this.logger != null) {
+            this.logger.info("BitCam H.264 decoder for " + streamerId + ": " + message);
+        }
+    }
+
     private void noteDecoderGivenUp(UUID streamerId) {
         if (this.logger == null) {
             return;
@@ -318,7 +327,9 @@ public final class RemoteFrameStore implements AutoCloseable {
             if (this.decoder == null || this.codec != frameCodec) {
                 this.closeDecoder();
                 this.decoder = frameCodec == BitCamVideoCodec.H264
-                    ? new H264FrameDecoder(exception -> RemoteFrameStore.this.noteDecoderFailure(this.streamerId, exception))
+                    ? new H264FrameDecoder(
+                        exception -> RemoteFrameStore.this.noteDecoderFailure(this.streamerId, exception),
+                        message -> RemoteFrameStore.this.noteDecoderDiagnostic(this.streamerId, message))
                     : new JpegFrameDecoder();
                 this.codec = frameCodec;
             }

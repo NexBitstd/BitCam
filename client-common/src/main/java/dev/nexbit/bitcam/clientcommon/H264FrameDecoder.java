@@ -30,16 +30,22 @@ final class H264FrameDecoder implements FrameDecoder {
     private final BlockingInputStream input = new BlockingInputStream();
     private final ConcurrentLinkedQueue<FrameMeta> pendingMeta = new ConcurrentLinkedQueue<>();
     private final Consumer<Throwable> failureConsumer;
+    // One-shot lifecycle diagnostics (keyframe seen / grabber up / first frame out) so a stalled stream
+    // can be told apart from a missing keyframe or a non-emitting grabber from the log alone.
+    private final Consumer<String> lifecycleLog;
     private volatile Consumer<DecodedFrame> output;
     private volatile boolean closed;
     private volatile boolean failed;
     private boolean keyFrameSeen;
     private boolean started;
+    private boolean firstFrameLogged;
     private Thread grabThread;
 
-    H264FrameDecoder(Consumer<Throwable> failureConsumer) {
+    H264FrameDecoder(Consumer<Throwable> failureConsumer, Consumer<String> lifecycleLog) {
         this.failureConsumer = failureConsumer == null ? ignored -> {
         } : failureConsumer;
+        this.lifecycleLog = lifecycleLog == null ? ignored -> {
+        } : lifecycleLog;
     }
 
     @Override
@@ -56,6 +62,7 @@ final class H264FrameDecoder implements FrameDecoder {
                 return;
             }
             this.keyFrameSeen = true;
+            this.lifecycleLog.accept("received first keyframe (" + frame.width() + "x" + frame.height() + "), starting decoder");
         }
 
         this.output = output;
@@ -80,6 +87,7 @@ final class H264FrameDecoder implements FrameDecoder {
             grabber = new FFmpegFrameGrabber(this.input);
             grabber.setFormat("h264");
             grabber.start();
+            this.lifecycleLog.accept("FFmpeg grabber initialised, awaiting decoded frames");
             while (!this.closed) {
                 Frame frame = grabber.grabImage();
                 if (frame == null) {
@@ -97,6 +105,10 @@ final class H264FrameDecoder implements FrameDecoder {
                 sink.accept(VideoFrameSupport.toDecodedFrame(
                     image, meta.frameId(), meta.captureTimeMillis(), meta.sourceWidth(), meta.sourceHeight(), meta.bubbleStyle()
                 ));
+                if (!this.firstFrameLogged) {
+                    this.firstFrameLogged = true;
+                    this.lifecycleLog.accept("decoded first frame " + image.getWidth() + "x" + image.getHeight());
+                }
             }
         } catch (Throwable exception) {
             if (!this.closed) {

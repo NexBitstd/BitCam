@@ -86,7 +86,9 @@ public final class FabricBitCamClientRuntime {
         });
         ClientPlayConnectionEvents.DISCONNECT.register((handler, client) -> {
             this.sessionController.onDisconnect();
-            this.billboardRenderer.close();
+            // DISCONNECT can fire on the Netty IO thread (e.g. a dropped/timed-out connection), but
+            // close() releases GL textures and must run on the render thread.
+            this.client.execute(this.billboardRenderer::close);
         });
         ClientTickEvents.END_CLIENT_TICK.register(client -> {
             while (this.toggleKey.consumeClick()) {

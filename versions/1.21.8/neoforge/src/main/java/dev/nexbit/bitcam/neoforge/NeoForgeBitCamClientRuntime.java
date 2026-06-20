@@ -78,7 +78,8 @@ public final class NeoForgeBitCamClientRuntime {
 
     public void onClientLoggingOut(ClientPlayerNetworkEvent.LoggingOut event) {
         this.sessionController.onDisconnect();
-        this.billboardRenderer.close();
+        // Logout can fire off the render thread, but close() releases GL textures and must run there.
+        this.client.execute(this.billboardRenderer::close);
     }
 
     public void onClientTick(ClientTickEvent.Post event) {

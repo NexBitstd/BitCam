@@ -18,6 +18,7 @@ import java.io.IOException;
 import java.net.InetSocketAddress;
 import java.net.PortUnreachableException;
 import java.nio.ByteBuffer;
+import java.nio.channels.ClosedChannelException;
 import java.nio.channels.DatagramChannel;
 import java.util.UUID;
 import java.util.concurrent.ExecutorService;
@@ -26,6 +27,7 @@ import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.Semaphore;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.concurrent.locks.LockSupport;
 import java.util.function.IntConsumer;
@@ -60,13 +62,20 @@ public final class BitCamUdpClient implements AutoCloseable {
     private final Semaphore frameSendSignal = new Semaphore(0);
 
     private static final long UNREACHABLE_LOG_INTERVAL_NANOS = 15_000_000_000L;
+    private static final long SEND_FAILURE_LOG_INTERVAL_NANOS = 15_000_000_000L;
 
-    private DatagramChannel channel;
+    // Read by the receive/send/keep-alive threads; swapped wholesale by reopenChannel() on a network
+    // change, so it must be volatile.
+    private volatile DatagramChannel channel;
     private ServerWelcomeSignalPacket welcome;
     private volatile boolean connected;
-    private ScheduledFuture<?> handshakeTask;
+    private volatile boolean closing;
+    private volatile ScheduledFuture<?> handshakeTask;
     private ScheduledFuture<?> keepAliveTask;
+    // Guards against queueing a socket rebuild for every failed packet during a single outage.
+    private final AtomicBoolean reconnectInFlight = new AtomicBoolean(false);
     private long lastUnreachableLogNanos;
+    private long lastSendFailureLogNanos;
 
     public BitCamUdpClient(
         PlatformAccess platform,
@@ -220,10 +229,16 @@ public final class BitCamUdpClient implements AutoCloseable {
 
     private void listen() {
         ByteBuffer buffer = ByteBuffer.allocate(this.welcome.mtu() * 2);
-        while (this.channel != null && this.channel.isOpen()) {
+        while (!this.closing) {
+            DatagramChannel active = this.channel;
+            if (active == null || !active.isOpen()) {
+                // Channel is mid-rebuild after a network change — wait briefly and re-read it.
+                LockSupport.parkNanos(50_000_000L);
+                continue;
+            }
             try {
                 buffer.clear();
-                if (this.channel.receive(buffer) == null) {
+                if (active.receive(buffer) == null) {
                     continue;
                 }
 
@@ -237,7 +252,9 @@ public final class BitCamUdpClient implements AutoCloseable {
                 // and just warn (throttled) instead of spamming a stack trace every second.
                 this.noteServerUnreachable();
             } catch (IOException exception) {
-                if (this.channel != null && this.channel.isOpen()) {
+                // A reconnect closes the old channel out from under receive(); only surface errors that
+                // aren't the result of that swap or of shutdown.
+                if (!this.closing && active == this.channel && active.isOpen()) {
                     this.platform.logger().error("BitCam UDP client failed while receiving packets", exception);
                 }
             } catch (RuntimeException exception) {
@@ -313,7 +330,67 @@ public final class BitCamUdpClient implements AutoCloseable {
         } catch (PortUnreachableException exception) {
             this.noteServerUnreachable();
         } catch (IOException exception) {
-            this.platform.logger().error("Failed to send BitCam UDP packet", exception);
+            // "Can't assign requested address" and friends mean the socket's bound local address went
+            // away (Wi-Fi roam / VPN / interface switch). Throttle the log and rebuild the socket on a
+            // currently-valid local address instead of spamming a stack trace every keep-alive.
+            this.noteSendFailure(exception);
+            this.scheduleReconnect();
+        }
+    }
+
+    private void noteSendFailure(IOException exception) {
+        long now = System.nanoTime();
+        if ((now - this.lastSendFailureLogNanos) < SEND_FAILURE_LOG_INTERVAL_NANOS) {
+            return;
+        }
+        this.lastSendFailureLogNanos = now;
+        this.platform.logger().warn(
+            "BitCam UDP send failed (" + exception.getMessage() + "); rebuilding the socket. "
+                + "Expected after a network change (Wi-Fi roam / VPN / interface switch)."
+        );
+    }
+
+    // Rebuild the datagram socket on the keep-alive thread. A network change can strand the socket on a
+    // local address that no longer exists; a fresh socket re-binds to a currently-valid one.
+    private void scheduleReconnect() {
+        if (this.closing || this.welcome == null) {
+            return;
+        }
+        // Collapse the burst of failures during one outage into a single rebuild.
+        if (!this.reconnectInFlight.compareAndSet(false, true)) {
+            return;
+        }
+        this.keepAliveExecutor.submit(this::reopenChannel);
+    }
+
+    private void reopenChannel() {
+        try {
+            if (this.closing || this.welcome == null) {
+                return;
+            }
+            DatagramChannel fresh = DatagramChannel.open();
+            fresh.connect(new InetSocketAddress(this.welcome.udpHost(), this.welcome.udpPort()));
+            DatagramChannel previous = this.channel;
+            this.channel = fresh;
+            // The fresh socket must redo the UDP session handshake from scratch.
+            this.connected = false;
+            if (previous != null) {
+                try {
+                    previous.close();
+                } catch (IOException ignored) {
+                    // Best-effort: the old socket is already unusable.
+                }
+            }
+            // After the first accept the handshake task is cancelled; a rebuild needs it running again.
+            if (this.handshakeTask == null && !this.closing) {
+                this.handshakeTask = this.keepAliveExecutor.scheduleAtFixedRate(
+                    this::sendSessionRequest, 0L, 1L, TimeUnit.SECONDS
+                );
+            }
+        } catch (IOException exception) {
+            // The interface may still be down; the next failed send schedules another attempt.
+        } finally {
+            this.reconnectInFlight.set(false);
         }
     }
 
@@ -332,11 +409,16 @@ public final class BitCamUdpClient implements AutoCloseable {
     }
 
     private void send(byte[] bytes) throws IOException {
-        this.channel.write(ByteBuffer.wrap(bytes));
+        DatagramChannel active = this.channel;
+        if (active == null) {
+            throw new ClosedChannelException();
+        }
+        active.write(ByteBuffer.wrap(bytes));
     }
 
     @Override
     public void close() {
+        this.closing = true;
         try {
             if (this.channel != null) {
                 this.channel.close();
