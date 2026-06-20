@@ -29,12 +29,18 @@ import org.bytedeco.javacv.Java2DFrameConverter;
 final class H264FrameDecoder implements FrameDecoder {
     private final BlockingInputStream input = new BlockingInputStream();
     private final ConcurrentLinkedQueue<FrameMeta> pendingMeta = new ConcurrentLinkedQueue<>();
+    private final Consumer<Throwable> failureConsumer;
     private volatile Consumer<DecodedFrame> output;
     private volatile boolean closed;
     private volatile boolean failed;
     private boolean keyFrameSeen;
     private boolean started;
     private Thread grabThread;
+
+    H264FrameDecoder(Consumer<Throwable> failureConsumer) {
+        this.failureConsumer = failureConsumer == null ? ignored -> {
+        } : failureConsumer;
+    }
 
     @Override
     public void decode(RemoteFrame frame, Consumer<DecodedFrame> output) {
@@ -92,9 +98,10 @@ final class H264FrameDecoder implements FrameDecoder {
                     image, meta.frameId(), meta.captureTimeMillis(), meta.sourceWidth(), meta.sourceHeight(), meta.bubbleStyle()
                 ));
             }
-        } catch (Throwable ignored) {
+        } catch (Throwable exception) {
             if (!this.closed) {
                 this.failed = true;
+                this.failureConsumer.accept(exception);
             }
             // A grabber failure ends decoding; the stream is rebuilt on the next keyframe.
         } finally {

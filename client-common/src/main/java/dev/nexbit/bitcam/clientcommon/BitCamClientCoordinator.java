@@ -17,7 +17,7 @@ public final class BitCamClientCoordinator implements AutoCloseable {
     private final Supplier<UUID> playerIdSupplier;
     private final BitCamClientConfig config;
     private final BitCamHelloRequester helloRequester;
-    private final RemoteFrameStore frameStore = new RemoteFrameStore();
+    private final RemoteFrameStore frameStore;
     private final LocalPreviewStore previewStore = new LocalPreviewStore();
     private final CameraCaptureController cameraCapture = new CameraCaptureController();
 
@@ -40,6 +40,7 @@ public final class BitCamClientCoordinator implements AutoCloseable {
         this.playerIdSupplier = playerIdSupplier;
         this.helloRequester = helloRequester;
         this.config = BitCamClientConfig.load(platform.configDirectory());
+        this.frameStore = new RemoteFrameStore(platform.logger());
     }
 
     public ClientHelloSignalPacket createHelloPacket() {
@@ -236,7 +237,8 @@ public final class BitCamClientCoordinator implements AutoCloseable {
                     welcomeSnapshot.fps(),
                     welcomeSnapshot.quality(),
                     frame -> udpClientSnapshot.sendFrame(this.playerIdSupplier.get(), frame, this.config.bubbleStyle()),
-                    this.previewStore::accept
+                    this.previewStore::accept,
+                    exception -> this.handleAsyncCameraFailure(udpClientSnapshot, exception)
                 );
                 this.lastCameraErrorMessage = "";
                 this.streamingEnabled = true;
@@ -253,6 +255,22 @@ public final class BitCamClientCoordinator implements AutoCloseable {
                 this.cameraStarting = false;
             }
         });
+    }
+
+    private void handleAsyncCameraFailure(BitCamUdpClient udpClientSnapshot, Throwable exception) {
+        this.streamingEnabled = false;
+        this.previewStore.clear();
+        String message = exception.getMessage() == null || exception.getMessage().isBlank()
+            ? "Camera streaming stopped unexpectedly."
+            : exception.getMessage();
+        this.lastCameraErrorMessage = message;
+        try {
+            udpClientSnapshot.sendStop(this.playerIdSupplier.get());
+        } catch (RuntimeException ignored) {
+            // Best-effort: the UDP client may already be closing while the capture thread unwinds.
+        }
+        this.platform.logger().warn("BitCam camera streaming stopped unexpectedly: " + message);
+        this.platform.logger().error("BitCam async camera capture failure", exception);
     }
 
     private void awaitCameraBackendReady() {

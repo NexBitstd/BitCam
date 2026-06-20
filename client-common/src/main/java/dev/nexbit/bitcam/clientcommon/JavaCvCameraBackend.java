@@ -34,6 +34,10 @@ public final class JavaCvCameraBackend implements CameraBackend {
     private static final Pattern AVFOUNDATION_MODE_PATTERN = Pattern.compile("^.*?(\\d+)x(\\d+)@\\[(\\d+(?:\\.\\d+)?)\\s+(\\d+(?:\\.\\d+)?)\\]fps.*$");
     private static final Pattern DSHOW_MODE_PATTERN = Pattern.compile("min s=(\\d+)x(\\d+) fps=(\\d+(?:\\.\\d+)?) max s=\\d+x\\d+ fps=(\\d+(?:\\.\\d+)?)");
     private static final CameraCaptureMode PROBE_MODE = new CameraCaptureMode(1, 1, 30);
+    // A camera released a moment ago (e.g. toggling streaming off→on) can still report "busy" while the
+    // OS tears down the capture graph, so retry a busy open a few times before giving up on a mode.
+    private static final int OPEN_ATTEMPTS = 3;
+    private static final long OPEN_RETRY_DELAY_MILLIS = 250L;
 
     private volatile List<CameraDeviceInfo> cachedDevices = List.of();
     private volatile String cachedFailureMessage = "";
@@ -98,18 +102,24 @@ public final class JavaCvCameraBackend implements CameraBackend {
         List<String> failures = new ArrayList<>();
 
         for (CameraCaptureMode mode : candidates) {
-            FFmpegFrameGrabber grabber = new FFmpegFrameGrabber(grabberInput(deviceId));
-            configureGrabber(grabber, mode);
-            try {
-                grabber.start();
-                return new Session(grabber, mode);
-            } catch (FrameGrabber.Exception exception) {
-                failures.add(mode.label() + ": " + summarize(exception));
+            FrameGrabber.Exception lastError = null;
+            for (int attempt = 1; attempt <= OPEN_ATTEMPTS; attempt++) {
+                FFmpegFrameGrabber grabber = new FFmpegFrameGrabber(grabberInput(deviceId));
+                configureGrabber(grabber, mode);
                 try {
-                    grabber.release();
-                } catch (FrameGrabber.Exception ignored) {
+                    grabber.start();
+                    return new Session(grabber, mode);
+                } catch (FrameGrabber.Exception exception) {
+                    lastError = exception;
+                    releaseQuietly(grabber);
+                    if (attempt < OPEN_ATTEMPTS && isDeviceBusy(exception)) {
+                        sleepQuietly(OPEN_RETRY_DELAY_MILLIS);
+                        continue;
+                    }
+                    break;
                 }
             }
+            failures.add(mode.label() + ": " + summarize(lastError));
         }
 
         throw new IllegalStateException(
@@ -584,6 +594,9 @@ public final class JavaCvCameraBackend implements CameraBackend {
     }
 
     private static String summarize(Throwable throwable) {
+        if (throwable == null) {
+            return "unknown error";
+        }
         Throwable root = throwable;
         while (root.getCause() != null) {
             root = root.getCause();
@@ -595,6 +608,32 @@ public final class JavaCvCameraBackend implements CameraBackend {
         }
 
         return message;
+    }
+
+    private static boolean isDeviceBusy(Throwable error) {
+        String message = summarize(error).toLowerCase(Locale.ROOT);
+        return message.contains("busy")
+            || message.contains("in use")
+            || message.contains("being used")
+            || message.contains("i/o error")
+            || message.contains("could not open")
+            || message.contains("device or resource");
+    }
+
+    private static void releaseQuietly(FFmpegFrameGrabber grabber) {
+        try {
+            grabber.release();
+        } catch (FrameGrabber.Exception ignored) {
+            // Best-effort cleanup of a grabber that failed to start.
+        }
+    }
+
+    private static void sleepQuietly(long millis) {
+        try {
+            Thread.sleep(millis);
+        } catch (InterruptedException exception) {
+            Thread.currentThread().interrupt();
+        }
     }
 
     // --- Session ---

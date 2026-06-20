@@ -1,6 +1,7 @@
 package dev.nexbit.bitcam.servercommon;
 
 import dev.nexbit.bitcam.protocol.udp.BitCamBubbleStyle;
+import dev.nexbit.bitcam.protocol.udp.BitCamVideoCodec;
 import dev.nexbit.bitcam.protocol.udp.VideoFrameUdpPacket;
 
 final class BitCamStreamState {
@@ -8,6 +9,7 @@ final class BitCamStreamState {
     private volatile int height;
     private volatile int frameId;
     private volatile int fragmentCount;
+    private volatile BitCamVideoCodec codec = BitCamVideoCodec.H264;
     private volatile boolean keyFrame;
     private volatile int viewerCount;
     private volatile long captureTimeMillis;
@@ -19,6 +21,7 @@ final class BitCamStreamState {
         this.height = packet.height();
         this.frameId = packet.frameId();
         this.fragmentCount = packet.fragmentCount();
+        this.codec = packet.codec();
         this.keyFrame = packet.keyFrame();
         this.viewerCount = viewerCount;
         this.captureTimeMillis = packet.captureTimeMillis();
@@ -32,6 +35,7 @@ final class BitCamStreamState {
             this.height,
             this.frameId,
             this.fragmentCount,
+            this.codec,
             this.keyFrame,
             this.viewerCount,
             Math.max(0L, now - this.captureTimeMillis),

@@ -87,6 +87,8 @@ public final class BitCamServerDebugFormatter {
                     + stream.frameId()
                     + " fragments="
                     + stream.fragmentCount()
+                    + " codec="
+                    + stream.codec()
                     + " keyFrame="
                     + stream.keyFrame()
                     + " viewers="

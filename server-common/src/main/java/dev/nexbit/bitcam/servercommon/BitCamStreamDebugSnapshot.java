@@ -1,12 +1,14 @@
 package dev.nexbit.bitcam.servercommon;
 
 import dev.nexbit.bitcam.protocol.udp.BitCamBubbleStyle;
+import dev.nexbit.bitcam.protocol.udp.BitCamVideoCodec;
 
 public record BitCamStreamDebugSnapshot(
     int width,
     int height,
     int frameId,
     int fragmentCount,
+    BitCamVideoCodec codec,
     boolean keyFrame,
     int viewerCount,
     long captureAgeMillis,

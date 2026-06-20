@@ -1,5 +1,6 @@
 package dev.nexbit.bitcam.clientcommon;
 
+import dev.nexbit.bitcam.common.PlatformLogger;
 import dev.nexbit.bitcam.protocol.udp.BitCamBubbleStyle;
 import dev.nexbit.bitcam.protocol.udp.BitCamVideoCodec;
 import dev.nexbit.bitcam.protocol.udp.StreamStoppedUdpPacket;
@@ -8,6 +9,7 @@ import dev.nexbit.bitcam.protocol.udp.VideoFrameUdpPacket;
 import java.util.Arrays;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.ConcurrentHashMap;
@@ -22,8 +24,18 @@ import java.util.function.ObjIntConsumer;
  * ({@link RemoteStreamPlayout}) that smooths out bursty network delivery.
  */
 public final class RemoteFrameStore implements AutoCloseable {
+    private static final long DECODER_FAILURE_LOG_INTERVAL_NANOS = 5_000_000_000L;
+    // After this many decoder restarts for one stream we stop rebuilding it: a persistent failure
+    // (almost always missing/unloadable native FFmpeg) won't fix itself, and retrying every keyframe
+    // just spawns short-lived grab threads forever.
+    private static final int MAX_DECODER_FAILURES = 5;
+
     private final Map<UUID, RemoteStream> streams = new ConcurrentHashMap<>();
     private final Map<String, PendingFrame> pendingFrames = new ConcurrentHashMap<>();
+    // Streamers we've already logged a "started receiving" line for, so the diagnostic fires once per
+    // stream rather than on every fragment.
+    private final Set<UUID> receivingLogged = ConcurrentHashMap.newKeySet();
+    private final PlatformLogger logger;
     // Single decode thread with a small bounded queue: if decoding can't keep up, the oldest queued
     // frame is dropped rather than letting the backlog (and memory) grow without bound — for video,
     // skipping a stale frame is always better than falling further behind.
@@ -48,6 +60,15 @@ public final class RemoteFrameStore implements AutoCloseable {
     // Sink that reports loss (per-mille) for a given streamer; wired to the UDP client on connect.
     private volatile ObjIntConsumer<UUID> receiverReportSink = (streamerId, lossPermille) -> {
     };
+    private volatile long lastDecoderFailureLogNanos;
+
+    public RemoteFrameStore() {
+        this(null);
+    }
+
+    public RemoteFrameStore(PlatformLogger logger) {
+        this.logger = logger;
+    }
 
     public void setKeyframeRequestSink(Consumer<UUID> sink) {
         this.keyframeRequestSink = sink == null ? streamerId -> {
@@ -60,6 +81,11 @@ public final class RemoteFrameStore implements AutoCloseable {
     }
 
     public void accept(VideoFrameUdpPacket packet) {
+        if (this.logger != null && this.receivingLogged.add(packet.streamerId())) {
+            // One-shot diagnostic: confirms fragments are arriving from this streamer. If this never
+            // appears, the problem is upstream (routing / UDP), not the local decoder.
+            this.logger.info("BitCam started receiving " + packet.codec() + " video from " + packet.streamerId());
+        }
         String key = packet.streamerId() + ":" + packet.frameId();
         PendingFrame pending = this.pendingFrames.computeIfAbsent(key, ignored -> new PendingFrame());
         pending.recordDataMeta(packet);
@@ -110,6 +136,7 @@ public final class RemoteFrameStore implements AutoCloseable {
     }
 
     public void accept(StreamStoppedUdpPacket packet) {
+        this.receivingLogged.remove(packet.streamerId());
         RemoteStream removed = this.streams.remove(packet.streamerId());
         if (removed != null) {
             removed.close();
@@ -139,6 +166,7 @@ public final class RemoteFrameStore implements AutoCloseable {
                 return false;
             }
             stream.close();
+            this.receivingLogged.remove(stream.streamerId);
             return true;
         });
         this.pendingFrames.entrySet().removeIf(entry -> entry.getValue().createdAtMillis < cutoff);
@@ -156,6 +184,7 @@ public final class RemoteFrameStore implements AutoCloseable {
         }
         this.streams.clear();
         this.pendingFrames.clear();
+        this.receivingLogged.clear();
     }
 
     private void submitDecode(RemoteFrame encoded) {
@@ -163,6 +192,32 @@ public final class RemoteFrameStore implements AutoCloseable {
         // decode() runs on the single decode thread; the decoder delivers finished frames to the
         // playout — synchronously for JPEG, or later from its own thread for H.264.
         this.decodeExecutor.submit(() -> stream.decode(encoded));
+    }
+
+    private void noteDecoderFailure(UUID streamerId, Throwable exception) {
+        if (this.logger == null) {
+            return;
+        }
+        long now = System.nanoTime();
+        if ((now - this.lastDecoderFailureLogNanos) < DECODER_FAILURE_LOG_INTERVAL_NANOS) {
+            return;
+        }
+        this.lastDecoderFailureLogNanos = now;
+        this.logger.error(
+            "BitCam failed to decode remote H.264 stream from " + streamerId
+                + ". Fix FFmpeg/JavaCV native loading on this client.",
+            exception
+        );
+    }
+
+    private void noteDecoderGivenUp(UUID streamerId) {
+        if (this.logger == null) {
+            return;
+        }
+        this.logger.error(
+            "BitCam gave up decoding the H.264 stream from " + streamerId + " after " + MAX_DECODER_FAILURES
+                + " failed attempts. Native FFmpeg/JavaCV libraries are likely missing or failed to load on this client."
+        );
     }
 
     /** Per-stream decoder + playout pair, so a stream's codec state and buffer are removed together. */
@@ -174,6 +229,8 @@ public final class RemoteFrameStore implements AutoCloseable {
         private int lastFrameId = -1;
         private boolean awaitingKeyframe = true;
         private long lastKeyframeRequestNanos;
+        private int decoderFailures;
+        private boolean decoderGivenUp;
         private int windowReceived;
         private int windowLost;
         private long lastReportNanos;
@@ -184,10 +241,13 @@ public final class RemoteFrameStore implements AutoCloseable {
 
         void decode(RemoteFrame frame) {
             this.accountReception(frame);
-            if (frame.codec() == BitCamVideoCodec.H264) {
+            if (frame.codec() == BitCamVideoCodec.H264 && !this.decoderGivenUp) {
                 this.trackKeyframeNeed(frame);
             }
-            this.decoderFor(frame.codec()).decode(frame, this.playout::offer);
+            FrameDecoder activeDecoder = this.decoderFor(frame.codec());
+            if (activeDecoder != null) {
+                activeDecoder.decode(frame, this.playout::offer);
+            }
             this.lastFrameId = frame.frameId();
         }
 
@@ -243,11 +303,23 @@ public final class RemoteFrameStore implements AutoCloseable {
             if (this.decoder instanceof H264FrameDecoder h264Decoder && h264Decoder.failed()) {
                 this.closeDecoder();
                 this.awaitingKeyframe = true;
+                if (++this.decoderFailures >= MAX_DECODER_FAILURES) {
+                    if (!this.decoderGivenUp) {
+                        this.decoderGivenUp = true;
+                        RemoteFrameStore.this.noteDecoderGivenUp(this.streamerId);
+                    }
+                    return null;
+                }
                 this.maybeRequestKeyframe();
+            }
+            if (this.decoderGivenUp) {
+                return null;
             }
             if (this.decoder == null || this.codec != frameCodec) {
                 this.closeDecoder();
-                this.decoder = frameCodec == BitCamVideoCodec.H264 ? new H264FrameDecoder() : new JpegFrameDecoder();
+                this.decoder = frameCodec == BitCamVideoCodec.H264
+                    ? new H264FrameDecoder(exception -> RemoteFrameStore.this.noteDecoderFailure(this.streamerId, exception))
+                    : new JpegFrameDecoder();
                 this.codec = frameCodec;
             }
             return this.decoder;
