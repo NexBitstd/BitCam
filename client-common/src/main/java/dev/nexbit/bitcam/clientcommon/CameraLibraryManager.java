@@ -166,6 +166,7 @@ public final class CameraLibraryManager {
             extractedDir.resolve(stripJarSuffix(openblasJar.getFileName().toString())),
             "org/bytedeco/openblas/" + classifier + "/"
         );
+        configureOpenBlasAliases(openblasNativeDir, classifier);
         Path opencvNativeDir = extractNativeDirectory(
             opencvJar,
             extractedDir.resolve(stripJarSuffix(opencvJar.getFileName().toString())),
@@ -177,8 +178,37 @@ public final class CameraLibraryManager {
             + openblasNativeDir.toAbsolutePath()
             + File.pathSeparator
             + opencvNativeDir.toAbsolutePath();
+        prependPathProperty("org.bytedeco.javacpp.platform.preloadpath", nativePaths);
+        prependPathProperty("org.bytedeco.javacpp.platform.linkpath", nativePaths);
         prependPathProperty("platform.preloadpath", nativePaths);
         prependPathProperty("platform.linkpath", nativePaths);
+    }
+
+    private static void configureOpenBlasAliases(Path openblasNativeDir, String classifier) throws IOException {
+        if (classifier.startsWith("macosx")) {
+            createLibraryAlias(openblasNativeDir, "libopenblas.0.dylib", "libopenblas_nolapack.0.dylib");
+        } else if (classifier.startsWith("windows")) {
+            createLibraryAlias(openblasNativeDir, "libopenblas.dll", "libopenblas_nolapack.dll");
+            createLibraryAlias(openblasNativeDir, "openblas.dll", "openblas_nolapack.dll");
+        } else {
+            createLibraryAlias(openblasNativeDir, "libopenblas.so.0", "libopenblas_nolapack.so.0");
+            createLibraryAlias(openblasNativeDir, "libopenblas.so", "libopenblas_nolapack.so");
+        }
+    }
+
+    private static void createLibraryAlias(Path directory, String sourceName, String aliasName) throws IOException {
+        Path source = directory.resolve(sourceName);
+        Path alias = directory.resolve(aliasName);
+        if (!Files.isRegularFile(source) || Files.exists(alias) || Files.isSymbolicLink(alias)) {
+            return;
+        }
+
+        try {
+            Files.createSymbolicLink(alias, source.getFileName());
+        } catch (IOException | UnsupportedOperationException | SecurityException exception) {
+            Files.copy(source, alias, StandardCopyOption.REPLACE_EXISTING);
+        }
+        alias.toFile().setExecutable(true, false);
     }
 
     private static Path extractNativeDirectory(Path jar, Path targetDir, String entryPrefix) throws IOException {

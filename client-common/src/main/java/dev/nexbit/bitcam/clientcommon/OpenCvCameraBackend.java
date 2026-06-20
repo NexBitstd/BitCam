@@ -8,6 +8,7 @@ import java.util.List;
 import java.util.Locale;
 import org.bytedeco.javacpp.BytePointer;
 import org.bytedeco.javacpp.Loader;
+import org.bytedeco.openblas.global.openblas_nolapack;
 import org.bytedeco.opencv.global.opencv_core;
 import org.bytedeco.opencv.global.opencv_imgproc;
 import org.bytedeco.opencv.global.opencv_videoio;
@@ -177,6 +178,7 @@ public final class OpenCvCameraBackend implements CameraBackend {
     private static void ensureOpenCvReady() {
         CameraLibraryManager.applyToThread();
         try {
+            Loader.load(openblas_nolapack.class);
             Loader.load(opencv_core.class);
             Loader.load(opencv_imgproc.class);
             Loader.load(opencv_videoio.class);
