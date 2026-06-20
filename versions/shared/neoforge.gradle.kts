@@ -17,8 +17,10 @@ fun versionProperty(name: String): String = versionProperties[name]
 val mcVersion = versionProperty("minecraft_version")
 val neoforgeVersion = versionProperty("neoforge_version")
 val devauthVersion = rootProject.property("devauth_version") as String
-val javacvVersion = rootProject.property("javacv_version") as String
-val ffmpegVersion = rootProject.property("bytedeco_ffmpeg_version") as String
+val javacppVersion = rootProject.property("javacpp_version") as String
+val bytedecoOpenCvVersion = rootProject.property("bytedeco_opencv_version") as String
+val bytedecoOpenBlasVersion = rootProject.property("bytedeco_openblas_version") as String
+val javah264Version = rootProject.property("javah264_version") as String
 val modId = rootProject.property("mod_id") as String
 val modName = rootProject.property("mod_name") as String
 val modDescription = rootProject.property("mod_description") as String
@@ -53,20 +55,21 @@ val hostBytedecoClassifier = run {
     }
 }
 val bytedecoDesktopClassifiers = listOf(hostBytedecoClassifier)
-val javaCvBundledLibraries = listOf(
-    "org.bytedeco:javacv:$javacvVersion",
-    "org.bytedeco:javacpp:$javacvVersion",
-    "org.bytedeco:ffmpeg:$ffmpegVersion"
+val openCvBundledLibraries = listOf(
+    "org.bytedeco:opencv:$bytedecoOpenCvVersion",
+    "org.bytedeco:openblas:$bytedecoOpenBlasVersion",
+    "org.bytedeco:javacpp:$javacppVersion"
 )
 val webcamCaptureLibraries = listOf(
     "com.github.sarxos:webcam-capture:0.3.12",
     "com.nativelibs4java:bridj:0.7.0"
 )
-val javaCvNativeRuntimeLibraries = bytedecoDesktopClassifiers.flatMap { classifier ->
+val javaH264Library = "dev.nexbit:javah264:$javah264Version"
+val openCvNativeRuntimeLibraries = bytedecoDesktopClassifiers.flatMap { classifier ->
     listOf(
-        "org.bytedeco:javacpp:$javacvVersion:$classifier",
-        // GPL ffmpeg build: the only one bundling the libx264 H.264 encoder.
-        "org.bytedeco:ffmpeg:$ffmpegVersion:$classifier-gpl"
+        "org.bytedeco:javacpp:$javacppVersion:$classifier",
+        "org.bytedeco:openblas:$bytedecoOpenBlasVersion:$classifier",
+        "org.bytedeco:opencv:$bytedecoOpenCvVersion:$classifier"
     )
 }
 
@@ -75,6 +78,17 @@ base {
 }
 
 repositories {
+    maven("https://maven.pkg.github.com/NexBitstd/JavaH264") {
+        name = "JavaH264GitHubPackages"
+        credentials {
+            username = providers.gradleProperty("gpr.user").orNull
+                ?: System.getenv("GITHUB_ACTOR")
+                ?: ""
+            password = providers.gradleProperty("gpr.key").orNull
+                ?: System.getenv("GITHUB_TOKEN")
+                ?: ""
+        }
+    }
     maven("https://libraries.minecraft.net/") {
         name = "MojangLibraries"
     }
@@ -128,10 +142,11 @@ dependencies {
     webcamCaptureLibraries.forEach { notation ->
         additionalRuntimeClasspath(notation)
     }
-    javaCvBundledLibraries.forEach { notation ->
+    openCvBundledLibraries.forEach { notation ->
         additionalRuntimeClasspath(notation)
     }
-    javaCvNativeRuntimeLibraries.forEach { notation ->
+    additionalRuntimeClasspath(javaH264Library)
+    openCvNativeRuntimeLibraries.forEach { notation ->
         additionalRuntimeClasspath(notation)
     }
 
@@ -141,11 +156,13 @@ dependencies {
     }
     jarJar("com.electronwill.night-config:toml:3.6.7")
     jarJar("com.electronwill.night-config:core:3.6.7")
-    javaCvBundledLibraries.forEach { notation ->
+    openCvBundledLibraries.forEach { notation ->
         runtimeOnly(notation)
         jarJar(notation)
     }
-    javaCvNativeRuntimeLibraries.forEach { notation ->
+    runtimeOnly(javaH264Library)
+    jarJar(javaH264Library)
+    openCvNativeRuntimeLibraries.forEach { notation ->
         runtimeOnly(notation)
     }
     runtimeOnly("me.djtheredstoner:DevAuth-neoforge:$devauthVersion")

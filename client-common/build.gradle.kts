@@ -4,7 +4,8 @@ import org.gradle.jvm.toolchain.JavaLanguageVersion
 
 val targetJavaVersion = (rootProject.property("java_version") as String).toInt()
 val baseArchiveName = rootProject.property("archives_base_name") as String
-val javacvVersion = rootProject.property("javacv_version") as String
+val bytedecoOpenCvVersion = rootProject.property("bytedeco_opencv_version") as String
+val javah264Version = rootProject.property("javah264_version") as String
 
 plugins {
     `java-library`
@@ -23,7 +24,8 @@ dependencies {
     api(project(":common"))
     api(project(":protocol"))
     compileOnly("com.github.sarxos:webcam-capture:0.3.12")
-    compileOnly("org.bytedeco:javacv:$javacvVersion")
+    compileOnly("org.bytedeco:opencv:$bytedecoOpenCvVersion")
+    compileOnly("dev.nexbit:javah264:$javah264Version")
 }
 
 tasks.withType<JavaCompile>().configureEach {

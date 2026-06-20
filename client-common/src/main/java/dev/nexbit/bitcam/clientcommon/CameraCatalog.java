@@ -161,12 +161,12 @@ public final class CameraCatalog {
     private static List<CameraBackend> candidateBackends(List<String> failures) {
         List<CameraBackend> candidates = new ArrayList<>(2);
         if (isMacOs()) {
-            addBackendCandidate(candidates, failures, "JavaCV/FFmpeg AVFoundation", JavaCvCameraBackend::new);
+            addBackendCandidate(candidates, failures, "OpenCV VideoCapture", OpenCvCameraBackend::new);
             return List.copyOf(candidates);
         }
 
-        // On Windows/Linux: try JavaCV (DirectShow/V4L2) first, then webcam-capture as fallback.
-        addBackendCandidate(candidates, failures, "JavaCV/FFmpeg", JavaCvCameraBackend::new);
+        // On Windows/Linux: try OpenCV first, then webcam-capture as fallback.
+        addBackendCandidate(candidates, failures, "OpenCV VideoCapture", OpenCvCameraBackend::new);
         addBackendCandidate(candidates, failures, "webcam-capture", WebcamCaptureBackend::new);
         return List.copyOf(candidates);
     }

@@ -1,57 +1,43 @@
 package dev.nexbit.bitcam.clientcommon;
 
+import java.io.File;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.net.HttpURLConnection;
 import java.net.URI;
-import java.io.File;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.nio.file.StandardOpenOption;
 import java.nio.file.StandardCopyOption;
+import java.nio.file.StandardOpenOption;
 import java.util.ArrayList;
 import java.util.LinkedHashSet;
 import java.util.Locale;
 import java.util.jar.JarEntry;
 import java.util.jar.JarInputStream;
-import org.bytedeco.ffmpeg.global.avutil;
-import org.bytedeco.javacv.FFmpegLogCallback;
 
 /**
- * Detects whether the platform-specific JavaCV/FFmpeg native JARs are already on the classpath
- * (dev environment) or need to be downloaded from Maven Central (released mod build).
+ * Detects whether platform-specific JavaCPP/OpenCV native JARs are already on the classpath (dev
+ * environment) or need to be downloaded from Maven Central (released mod build).
  *
- * Versions here must stay in sync with gradle.properties (javacv_version, bytedeco_ffmpeg_version).
+ * <p>Versions here must stay in sync with gradle.properties (javacpp_version,
+ * bytedeco_opencv_version, bytedeco_openblas_version).
  */
 public final class CameraLibraryManager {
     private static final String MAVEN_CENTRAL = "https://repo1.maven.org/maven2/";
-    private static final String JAVACV_VERSION = "1.5.12";
-    private static final String FFMPEG_VERSION = "7.1.1-1.5.12";
+    private static final String JAVACPP_VERSION = "1.5.12";
+    private static final String OPENCV_VERSION = "4.11.0-1.5.12";
+    private static final String OPENBLAS_VERSION = "0.3.30-1.5.12";
     private static final int BUFFER_SIZE = 64 * 1024;
 
     public enum Status { CHECKING, NOT_NEEDED, DOWNLOADING, READY, FAILED }
 
-    // The GPL FFmpeg build (the only one that bundles the libx264 encoder we need for H.264) ships its
-    // natives under the "-gpl" platform extension. javacpp must be told to look there or it will only
-    // search the plain platform folder and fail to find the encoder libraries.
-    private static final String FFMPEG_PLATFORM_EXTENSION = "-gpl";
-
-    static {
-        // Must be set before any javacpp Loader initializes; this class is touched (ensureReady) well
-        // before the first FFmpeg call, so the property is in place in time.
-        if (System.getProperty("org.bytedeco.javacpp.platform.extension") == null) {
-            System.setProperty("org.bytedeco.javacpp.platform.extension", FFMPEG_PLATFORM_EXTENSION);
-        }
-    }
-
     private static volatile Status status = Status.CHECKING;
     private static volatile String failureMessage = "";
     private static volatile int downloadProgressPercent = 0;
-    private static volatile Path ffmpegExecutable;
-    private static volatile boolean ffmpegLoggingConfigured;
 
-    private CameraLibraryManager() {}
+    private CameraLibraryManager() {
+    }
 
     public static Status status() {
         return status;
@@ -87,16 +73,15 @@ public final class CameraLibraryManager {
             return;
         }
 
-        // Try cached JARs from a previous session
         try {
             String classifier = detectClassifier();
-            String ffmpegClassifier = detectFfmpegClassifier();
             Path libsDir = cacheDir.resolve("camera-libs");
-            Path javacppJar = libsDir.resolve("javacpp-" + JAVACV_VERSION + "-" + classifier + ".jar");
-            Path ffmpegJar = libsDir.resolve("ffmpeg-" + FFMPEG_VERSION + "-" + ffmpegClassifier + ".jar");
+            Path javacppJar = libsDir.resolve("javacpp-" + JAVACPP_VERSION + "-" + classifier + ".jar");
+            Path openblasJar = libsDir.resolve("openblas-" + OPENBLAS_VERSION + "-" + classifier + ".jar");
+            Path opencvJar = libsDir.resolve("opencv-" + OPENCV_VERSION + "-" + classifier + ".jar");
 
-            if (Files.exists(javacppJar) && Files.exists(ffmpegJar)) {
-                configureDownloadedLibraries(libsDir, javacppJar, ffmpegJar, classifier, ffmpegClassifier);
+            if (Files.exists(javacppJar) && Files.exists(openblasJar) && Files.exists(opencvJar)) {
+                configureDownloadedLibraries(libsDir, javacppJar, openblasJar, opencvJar, classifier);
                 status = Status.READY;
                 downloadProgressPercent = 100;
                 return;
@@ -104,26 +89,28 @@ public final class CameraLibraryManager {
         } catch (Exception ignored) {
         }
 
-        // Need to download
         status = Status.DOWNLOADING;
         downloadProgressPercent = 0;
 
         try {
             String classifier = detectClassifier();
-            String ffmpegClassifier = detectFfmpegClassifier();
             Path libsDir = cacheDir.resolve("camera-libs");
             Files.createDirectories(libsDir);
 
             Path javacppJar = download(libsDir,
-                "org/bytedeco/javacpp/" + JAVACV_VERSION,
-                "javacpp-" + JAVACV_VERSION + "-" + classifier + ".jar",
-                0, 10);
-            Path ffmpegJar = download(libsDir,
-                "org/bytedeco/ffmpeg/" + FFMPEG_VERSION,
-                "ffmpeg-" + FFMPEG_VERSION + "-" + ffmpegClassifier + ".jar",
-                10, 98);
+                "org/bytedeco/javacpp/" + JAVACPP_VERSION,
+                "javacpp-" + JAVACPP_VERSION + "-" + classifier + ".jar",
+                0, 5);
+            Path openblasJar = download(libsDir,
+                "org/bytedeco/openblas/" + OPENBLAS_VERSION,
+                "openblas-" + OPENBLAS_VERSION + "-" + classifier + ".jar",
+                5, 20);
+            Path opencvJar = download(libsDir,
+                "org/bytedeco/opencv/" + OPENCV_VERSION,
+                "opencv-" + OPENCV_VERSION + "-" + classifier + ".jar",
+                20, 98);
 
-            configureDownloadedLibraries(libsDir, javacppJar, ffmpegJar, classifier, ffmpegClassifier);
+            configureDownloadedLibraries(libsDir, javacppJar, openblasJar, opencvJar, classifier);
             status = Status.READY;
             downloadProgressPercent = 100;
         } catch (Exception exception) {
@@ -135,23 +122,10 @@ public final class CameraLibraryManager {
     }
 
     /**
-     * Kept as the common pre-FFmpeg hook for callers. Downloaded native libraries are exposed through
-     * JavaCPP path properties because JavaCPP resolves resources through the FFmpeg classloader.
+     * Downloaded native libraries are exposed through JavaCPP path properties because JavaCPP resolves
+     * resources through generated OpenCV classloaders.
      */
     public static void applyToThread() {
-    }
-
-    public static void configureFfmpegLoggingAfterLoad() {
-        if (ffmpegLoggingConfigured) {
-            return;
-        }
-        try {
-            FFmpegLogCallback.set();
-            FFmpegLogCallback.setLevel(avutil.AV_LOG_ERROR);
-            ffmpegLoggingConfigured = true;
-        } catch (Throwable ignored) {
-            // Logging setup is optional; never let it poison camera startup.
-        }
     }
 
     public static String detectClassifier() {
@@ -164,31 +138,22 @@ public final class CameraLibraryManager {
         return isArm ? "linux-arm64" : "linux-x86_64";
     }
 
-    /** The ffmpeg native JAR uses the GPL variant (with libx264); javacpp itself has no GPL build. */
-    public static String detectFfmpegClassifier() {
-        return detectClassifier() + FFMPEG_PLATFORM_EXTENSION;
-    }
-
-    public static Path ffmpegExecutablePath() {
-        return ffmpegExecutable;
-    }
-
     private static boolean isNativeOnClasspath() {
-        String ffmpegClassifier = detectFfmpegClassifier();
-        boolean isWindows = ffmpegClassifier.startsWith("windows");
-        // This resource exists only in the platform-specific (GPL) ffmpeg native JAR.
-        String resource = "org/bytedeco/ffmpeg/" + ffmpegClassifier + "/" + (isWindows ? "ffmpeg.exe" : "ffmpeg");
+        String classifier = detectClassifier();
+        String openCvResource = "org/bytedeco/opencv/" + classifier + "/";
+        String openBlasResource = "org/bytedeco/openblas/" + classifier + "/";
         ClassLoader ctx = Thread.currentThread().getContextClassLoader();
-        return ctx.getResource(resource) != null
-            || CameraLibraryManager.class.getClassLoader().getResource(resource) != null;
+        ClassLoader own = CameraLibraryManager.class.getClassLoader();
+        return (ctx.getResource(openCvResource) != null || own.getResource(openCvResource) != null)
+            && (ctx.getResource(openBlasResource) != null || own.getResource(openBlasResource) != null);
     }
 
     private static void configureDownloadedLibraries(
         Path libsDir,
         Path javacppJar,
-        Path ffmpegJar,
-        String classifier,
-        String ffmpegClassifier
+        Path openblasJar,
+        Path opencvJar,
+        String classifier
     ) throws IOException {
         Path extractedDir = libsDir.resolve("extracted");
         Path javacppNativeDir = extractNativeDirectory(
@@ -196,23 +161,24 @@ public final class CameraLibraryManager {
             extractedDir.resolve(stripJarSuffix(javacppJar.getFileName().toString())),
             "org/bytedeco/javacpp/" + classifier + "/"
         );
-        Path ffmpegNativeDir = extractNativeDirectory(
-            ffmpegJar,
-            extractedDir.resolve(stripJarSuffix(ffmpegJar.getFileName().toString())),
-            "org/bytedeco/ffmpeg/" + ffmpegClassifier + "/"
+        Path openblasNativeDir = extractNativeDirectory(
+            openblasJar,
+            extractedDir.resolve(stripJarSuffix(openblasJar.getFileName().toString())),
+            "org/bytedeco/openblas/" + classifier + "/"
+        );
+        Path opencvNativeDir = extractNativeDirectory(
+            opencvJar,
+            extractedDir.resolve(stripJarSuffix(opencvJar.getFileName().toString())),
+            "org/bytedeco/opencv/" + classifier + "/"
         );
 
         String nativePaths = javacppNativeDir.toAbsolutePath()
             + File.pathSeparator
-            + ffmpegNativeDir.toAbsolutePath();
+            + openblasNativeDir.toAbsolutePath()
+            + File.pathSeparator
+            + opencvNativeDir.toAbsolutePath();
         prependPathProperty("platform.preloadpath", nativePaths);
         prependPathProperty("platform.linkpath", nativePaths);
-
-        Path executable = ffmpegNativeDir.resolve(ffmpegClassifier.startsWith("windows") ? "ffmpeg.exe" : "ffmpeg");
-        if (Files.isRegularFile(executable)) {
-            executable.toFile().setExecutable(true, false);
-            ffmpegExecutable = executable;
-        }
     }
 
     private static Path extractNativeDirectory(Path jar, Path targetDir, String entryPrefix) throws IOException {

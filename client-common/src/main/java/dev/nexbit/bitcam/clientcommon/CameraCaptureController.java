@@ -1,6 +1,5 @@
 package dev.nexbit.bitcam.clientcommon;
 
-import java.awt.image.BufferedImage;
 import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Executors;
@@ -120,8 +119,8 @@ public final class CameraCaptureController implements AutoCloseable {
         }
 
         try {
-            BufferedImage image = activeSession.captureFrame();
-            if (image == null) {
+            CapturedCameraFrame frame = activeSession.captureFrame(width, height);
+            if (frame == null) {
                 return;
             }
 
@@ -133,18 +132,17 @@ public final class CameraCaptureController implements AutoCloseable {
             int previewHeight = Math.min(height, PREVIEW_MAX_HEIGHT);
             int previewWidth = Math.max(1, Math.round((float) width * previewHeight / Math.max(1, height)));
             int previewFrameId = ++this.previewFrameCounter;
-            previewConsumer.accept(this.previewEncoder.encode(image, previewWidth, previewHeight, fps, quality, previewFrameId, captureTime));
+            previewConsumer.accept(this.previewEncoder.encode(
+                frame.toBufferedImage(), previewWidth, previewHeight, fps, quality, previewFrameId, captureTime
+            ));
 
             FrameEncoder networkEncoder = this.encoder;
             if (networkEncoder == null) {
                 return; // preview-only session — nothing to transmit
             }
 
-            // Hand the network encoder a private copy (the grabber reuses one buffer per frame) and let
-            // it encode on its own thread, so a slow H.264 frame never delays the next capture/preview.
-            BufferedImage networkSource = VideoFrameSupport.copy(image);
             this.networkEncodeExecutor.execute(() -> this.encodeAndSend(
-                networkEncoder, networkSource, width, height, fps, quality, captureTime, networkConsumer, failureConsumer
+                networkEncoder, frame, fps, quality, captureTime, networkConsumer, failureConsumer
             ));
         } catch (Throwable exception) {
             synchronized (this.lifecycleLock) {
@@ -161,9 +159,7 @@ public final class CameraCaptureController implements AutoCloseable {
     // requestKeyframe remain volatile for cross-thread calls.
     private void encodeAndSend(
         FrameEncoder networkEncoder,
-        BufferedImage source,
-        int width,
-        int height,
+        CapturedCameraFrame source,
         int fps,
         float quality,
         long captureTime,
@@ -181,9 +177,7 @@ public final class CameraCaptureController implements AutoCloseable {
             // Reserve the next network id but only commit it when the encoder actually emits a frame —
             // a buffered (null) frame must not consume an id, or viewers see a phantom gap and request
             // needless keyframes / inflate their reported loss.
-            EncodedLocalFrame networkFrame = networkEncoder.encode(
-                source, width, height, fps, quality, this.networkFrameCounter + 1, captureTime
-            );
+            EncodedLocalFrame networkFrame = networkEncoder.encode(source, fps, quality, this.networkFrameCounter + 1, captureTime);
             if (networkFrame != null) {
                 this.networkFrameCounter++;
                 networkConsumer.accept(networkFrame);

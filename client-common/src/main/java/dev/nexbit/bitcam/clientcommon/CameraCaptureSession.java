@@ -11,6 +11,11 @@ public interface CameraCaptureSession extends AutoCloseable {
 
     BufferedImage captureFrame() throws Exception;
 
+    default CapturedCameraFrame captureFrame(int targetWidth, int targetHeight) throws Exception {
+        BufferedImage image = this.captureFrame();
+        return image == null ? null : CapturedCameraFrame.fromBufferedImage(image, targetWidth, targetHeight);
+    }
+
     @Override
     void close() throws Exception;
 }

@@ -20,6 +20,16 @@ interface FrameEncoder extends AutoCloseable {
         long captureTimeMillis
     );
 
+    default EncodedLocalFrame encode(
+        CapturedCameraFrame source,
+        int fps,
+        float quality,
+        int frameId,
+        long captureTimeMillis
+    ) {
+        return this.encode(source.toBufferedImage(), source.width(), source.height(), fps, quality, frameId, captureTimeMillis);
+    }
+
     BitCamVideoCodec codec();
 
     /** Asks the encoder to emit a keyframe as soon as possible. No-op for intra-only codecs. */

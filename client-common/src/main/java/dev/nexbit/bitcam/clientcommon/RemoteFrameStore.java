@@ -26,7 +26,7 @@ import java.util.function.ObjIntConsumer;
 public final class RemoteFrameStore implements AutoCloseable {
     private static final long DECODER_FAILURE_LOG_INTERVAL_NANOS = 5_000_000_000L;
     // After this many decoder restarts for one stream we stop rebuilding it: a persistent failure
-    // (almost always missing/unloadable native FFmpeg) won't fix itself, and retrying every keyframe
+    // (almost always missing/unloadable native OpenH264) won't fix itself, and retrying every keyframe
     // just spawns short-lived grab threads forever.
     private static final int MAX_DECODER_FAILURES = 5;
 
@@ -163,7 +163,7 @@ public final class RemoteFrameStore implements AutoCloseable {
         long cutoff = System.currentTimeMillis() - maxAgeMillis;
         this.streams.values().removeIf(stream -> {
             // Keyed on the last frame *received*, not decoded: a decoder that takes a moment to spin up
-            // (FFmpeg grabber start) must not be torn down for "no decoded frames yet" while fragments
+            // must not be torn down for "no decoded frames yet" while fragments
             // are still arriving — tearing it down only restarts that slow spin-up forever.
             if (stream.lastFrameReceivedMillis >= cutoff) {
                 return false;
@@ -193,7 +193,7 @@ public final class RemoteFrameStore implements AutoCloseable {
     private void submitDecode(RemoteFrame encoded) {
         RemoteStream stream = this.streams.computeIfAbsent(encoded.streamerId(), RemoteStream::new);
         // decode() runs on the single decode thread; the decoder delivers finished frames to the
-        // playout — synchronously for JPEG, or later from its own thread for H.264.
+        // playout synchronously for JPEG and the current OpenH264 decoder.
         this.decodeExecutor.submit(() -> stream.decode(encoded));
     }
 
@@ -208,14 +208,14 @@ public final class RemoteFrameStore implements AutoCloseable {
         this.lastDecoderFailureLogNanos = now;
         this.logger.error(
             "BitCam failed to decode remote H.264 stream from " + streamerId
-                + ". Fix FFmpeg/JavaCV native loading on this client.",
+                + ". Fix javah264/OpenH264 native loading on this client.",
             exception
         );
     }
 
     // One-shot decoder lifecycle line per stream restart. With the stream torn down every ~10s when no
     // frame decodes, the cadence itself is the signal: "received first keyframe" without a following
-    // "decoded first frame" points at the grabber; no keyframe line at all points at delivery upstream.
+    // "decoded first frame" points at the decoder; no keyframe line at all points at delivery upstream.
     private void noteDecoderDiagnostic(UUID streamerId, String message) {
         if (this.logger != null) {
             this.logger.info("BitCam H.264 decoder for " + streamerId + ": " + message);
@@ -228,7 +228,7 @@ public final class RemoteFrameStore implements AutoCloseable {
         }
         this.logger.error(
             "BitCam gave up decoding the H.264 stream from " + streamerId + " after " + MAX_DECODER_FAILURES
-                + " failed attempts. Native FFmpeg/JavaCV libraries are likely missing or failed to load on this client."
+                + " failed attempts. Native javah264/OpenH264 libraries are likely missing or failed to load on this client."
         );
     }
 

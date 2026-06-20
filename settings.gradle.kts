@@ -63,6 +63,17 @@ dependencyResolutionManagement {
         maven("https://repo.essential.gg/repository/maven-public") {
             name = "Essential"
         }
+        maven("https://maven.pkg.github.com/NexBitstd/JavaH264") {
+            name = "JavaH264GitHubPackages"
+            credentials {
+                username = providers.gradleProperty("gpr.user").orNull
+                    ?: System.getenv("GITHUB_ACTOR")
+                    ?: ""
+                password = providers.gradleProperty("gpr.key").orNull
+                    ?: System.getenv("GITHUB_TOKEN")
+                    ?: ""
+            }
+        }
         maven("https://maven.neoforged.net/releases/") {
             name = "NeoForged"
         }

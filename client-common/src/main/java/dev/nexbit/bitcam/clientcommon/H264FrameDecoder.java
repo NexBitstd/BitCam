@@ -1,45 +1,27 @@
 package dev.nexbit.bitcam.clientcommon;
 
-import dev.nexbit.bitcam.protocol.udp.BitCamBubbleStyle;
+import dev.nexbit.javah264.DecodeResult;
+import dev.nexbit.javah264.H264Decoder;
 import java.awt.image.BufferedImage;
-import java.io.IOException;
-import java.io.InputStream;
-import java.util.concurrent.ArrayBlockingQueue;
-import java.util.concurrent.BlockingQueue;
-import java.util.concurrent.ConcurrentLinkedQueue;
-import java.util.concurrent.TimeUnit;
 import java.util.function.Consumer;
-import org.bytedeco.javacv.FFmpegFrameGrabber;
-import org.bytedeco.javacv.Frame;
-import org.bytedeco.javacv.Java2DFrameConverter;
 
 /**
- * H.264 decoder built on {@link FFmpegFrameGrabber}.
+ * Push-based OpenH264 decoder backed by javah264.
  *
- * <p>The grabber is pull-based and an Annex-B parser cannot emit a frame until it sees the start of
- * the next one, so decoding is inherently not 1:1: received bytes are pushed into a blocking stream
- * and a background grab thread emits decoded frames (one behind). Each decoded image is paired with
- * the metadata of the frame fed in the same order via a FIFO.
- *
- * <p>Decoding only starts once a keyframe has been seen, so a viewer that joins mid-stream waits for
- * the next IDR rather than feeding the decoder undecodable inter-frames.
- *
- * <p><b>Experimental:</b> needs in-game validation on each OS.
+ * <p>The transport already reassembles one complete Annex-B access unit per {@link RemoteFrame}; this
+ * decoder splits that AU into NAL units and feeds them directly to OpenH264. No container probing or
+ * stream buffering is involved, which keeps join and recovery latency low.
  */
 final class H264FrameDecoder implements FrameDecoder {
-    private final BlockingInputStream input = new BlockingInputStream();
-    private final ConcurrentLinkedQueue<FrameMeta> pendingMeta = new ConcurrentLinkedQueue<>();
+    private final Object lock = new Object();
     private final Consumer<Throwable> failureConsumer;
-    // One-shot lifecycle diagnostics (keyframe seen / grabber up / first frame out) so a stalled stream
-    // can be told apart from a missing keyframe or a non-emitting grabber from the log alone.
     private final Consumer<String> lifecycleLog;
-    private volatile Consumer<DecodedFrame> output;
-    private volatile boolean closed;
-    private volatile boolean failed;
+
+    private H264Decoder decoder;
     private boolean keyFrameSeen;
-    private boolean started;
     private boolean firstFrameLogged;
-    private Thread grabThread;
+    private volatile boolean failed;
+    private volatile boolean closed;
 
     H264FrameDecoder(Consumer<Throwable> failureConsumer, Consumer<String> lifecycleLog) {
         this.failureConsumer = failureConsumer == null ? ignored -> {
@@ -50,160 +32,87 @@ final class H264FrameDecoder implements FrameDecoder {
 
     @Override
     public void decode(RemoteFrame frame, Consumer<DecodedFrame> output) {
-        if (this.closed) {
-            return;
-        }
-        if (this.failed) {
-            return;
-        }
-        if (!this.keyFrameSeen) {
-            if (!frame.keyFrame()) {
-                // Can't start an H.264 decoder mid-GOP — wait for the first keyframe.
+        synchronized (this.lock) {
+            if (this.closed || this.failed) {
                 return;
             }
-            this.keyFrameSeen = true;
-            this.lifecycleLog.accept("received first keyframe (" + frame.width() + "x" + frame.height() + "), starting decoder");
-        }
+            if (!this.keyFrameSeen) {
+                if (!frame.keyFrame()) {
+                    // Can't start an H.264 decoder mid-GOP — wait for the first keyframe.
+                    return;
+                }
+                this.keyFrameSeen = true;
+                this.lifecycleLog.accept("received first keyframe (" + frame.width() + "x" + frame.height() + "), starting decoder");
+            }
 
-        this.output = output;
-        this.pendingMeta.add(new FrameMeta(frame.frameId(), frame.captureTimeMillis(), frame.width(), frame.height(), frame.bubbleStyle()));
-        this.input.write(frame.payload());
-
-        if (!this.started) {
-            this.started = true;
-            this.grabThread = new Thread(this::runGrabLoop, "bitcam-h264-decode");
-            this.grabThread.setDaemon(true);
-            this.grabThread.start();
+            try {
+                this.ensureDecoder();
+                for (byte[] nalUnit : H264Decoder.nalUnits(frame.payload())) {
+                    DecodeResult result = this.decoder.decodeRGBA(nalUnit);
+                    if (result == null) {
+                        continue;
+                    }
+                    BufferedImage image = rgbaToImage(result.getImage(), result.getWidth(), result.getHeight());
+                    output.accept(VideoFrameSupport.toDecodedFrame(
+                        image, frame.frameId(), frame.captureTimeMillis(), frame.width(), frame.height(), frame.bubbleStyle()
+                    ));
+                    if (!this.firstFrameLogged) {
+                        this.firstFrameLogged = true;
+                        this.lifecycleLog.accept("decoded first frame " + result.getWidth() + "x" + result.getHeight());
+                    }
+                }
+            } catch (Throwable exception) {
+                if (!this.closed) {
+                    this.failed = true;
+                    this.failureConsumer.accept(exception);
+                }
+            }
         }
     }
 
-    private void runGrabLoop() {
-        CameraLibraryManager.applyToThread();
-        FFmpegFrameGrabber grabber = null;
-        Java2DFrameConverter converter = new Java2DFrameConverter();
-        try {
-            FFmpegFrameGrabber.tryLoad();
-            CameraLibraryManager.configureFfmpegLoggingAfterLoad();
-            grabber = new FFmpegFrameGrabber(this.input);
-            grabber.setFormat("h264");
-            // Without these, avformat_find_stream_info() buffers seconds of a thin talking-head stream
-            // before start() returns — long enough for the jitter buffer to be pruned and the decoder
-            // torn down before it emits a single frame. The keyframe already carries SPS/PPS, so the
-            // demuxer needs almost no data to lock on; decode with minimal startup latency.
-            grabber.setOption("probesize", "32");
-            grabber.setOption("analyzeduration", "0");
-            grabber.setOption("fflags", "nobuffer");
-            grabber.setOption("flags", "low_delay");
-            grabber.start();
-            this.lifecycleLog.accept("FFmpeg grabber initialised, awaiting decoded frames");
-            while (!this.closed) {
-                Frame frame = grabber.grabImage();
-                if (frame == null) {
-                    if (this.closed) {
-                        break;
-                    }
-                    continue;
-                }
-                BufferedImage image = converter.convert(frame);
-                FrameMeta meta = this.pendingMeta.poll();
-                Consumer<DecodedFrame> sink = this.output;
-                if (image == null || meta == null || sink == null) {
-                    continue;
-                }
-                sink.accept(VideoFrameSupport.toDecodedFrame(
-                    image, meta.frameId(), meta.captureTimeMillis(), meta.sourceWidth(), meta.sourceHeight(), meta.bubbleStyle()
-                ));
-                if (!this.firstFrameLogged) {
-                    this.firstFrameLogged = true;
-                    this.lifecycleLog.accept("decoded first frame " + image.getWidth() + "x" + image.getHeight());
-                }
-            }
-        } catch (Throwable exception) {
-            if (!this.closed) {
-                this.failed = true;
-                this.failureConsumer.accept(exception);
-            }
-            // A grabber failure ends decoding; the stream is rebuilt on the next keyframe.
-        } finally {
-            if (grabber != null) {
-                try {
-                    grabber.close();
-                } catch (Exception ignored) {
-                    // Best-effort.
-                }
-            }
-            converter.close();
+    private void ensureDecoder() throws Exception {
+        if (this.decoder != null) {
+            return;
         }
+        this.decoder = H264Decoder.builder()
+            .flushBehavior(H264Decoder.FlushBehavior.NoFlush)
+            .build();
+        this.lifecycleLog.accept("openh264 H.264 decoder initialised, awaiting decoded frames");
+    }
+
+    private static BufferedImage rgbaToImage(byte[] rgba, int width, int height) {
+        BufferedImage image = new BufferedImage(width, height, BufferedImage.TYPE_INT_ARGB);
+        int[] argb = new int[width * height];
+        for (int i = 0, p = 0; i < argb.length; i++, p += 4) {
+            int red = rgba[p] & 0xFF;
+            int green = rgba[p + 1] & 0xFF;
+            int blue = rgba[p + 2] & 0xFF;
+            int alpha = rgba[p + 3] & 0xFF;
+            argb[i] = (alpha << 24) | (red << 16) | (green << 8) | blue;
+        }
+        image.setRGB(0, 0, width, height, argb, 0, width);
+        return image;
     }
 
     @Override
     public void close() {
-        this.closed = true;
-        this.input.close();
-        if (this.grabThread != null) {
-            this.grabThread.interrupt();
+        synchronized (this.lock) {
+            if (this.closed) {
+                return;
+            }
+            this.closed = true;
+            if (this.decoder != null) {
+                try {
+                    this.decoder.close();
+                } catch (Exception ignored) {
+                    // Best-effort during stream cleanup.
+                }
+                this.decoder = null;
+            }
         }
     }
 
     boolean failed() {
         return this.failed;
-    }
-
-    private record FrameMeta(int frameId, long captureTimeMillis, int sourceWidth, int sourceHeight, BitCamBubbleStyle bubbleStyle) {
-    }
-
-    /** Blocking {@link InputStream} backed by a bounded queue of byte chunks fed by the network. */
-    private static final class BlockingInputStream extends InputStream {
-        private final BlockingQueue<byte[]> chunks = new ArrayBlockingQueue<>(64);
-        private byte[] current = new byte[0];
-        private int position;
-        private volatile boolean closed;
-
-        void write(byte[] data) {
-            if (this.closed || data.length == 0) {
-                return;
-            }
-            // Drop on overflow rather than block the network thread; a gap just forces a keyframe wait.
-            this.chunks.offer(data);
-        }
-
-        @Override
-        public int read() throws IOException {
-            byte[] one = new byte[1];
-            int read = this.read(one, 0, 1);
-            return read < 0 ? -1 : (one[0] & 0xFF);
-        }
-
-        @Override
-        public int read(byte[] buffer, int offset, int length) throws IOException {
-            if (length == 0) {
-                return 0;
-            }
-            while (this.position >= this.current.length) {
-                if (this.closed) {
-                    return -1;
-                }
-                try {
-                    byte[] next = this.chunks.poll(200, TimeUnit.MILLISECONDS);
-                    if (next != null) {
-                        this.current = next;
-                        this.position = 0;
-                    }
-                } catch (InterruptedException exception) {
-                    Thread.currentThread().interrupt();
-                    return -1;
-                }
-            }
-            int toCopy = Math.min(length, this.current.length - this.position);
-            System.arraycopy(this.current, this.position, buffer, offset, toCopy);
-            this.position += toCopy;
-            return toCopy;
-        }
-
-        @Override
-        public void close() {
-            this.closed = true;
-            this.chunks.clear();
-        }
     }
 }

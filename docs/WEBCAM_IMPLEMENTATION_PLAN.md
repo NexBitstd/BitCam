@@ -26,12 +26,13 @@ Implemented:
   - UDP packet codec
   - session handshake packets
 - `client-common`
-  - webcam discovery via `webcam-capture`
   - backend abstraction for camera capture
-  - JavaCV/OpenCV camera backend for macOS
+  - OpenCV `VideoCapture` camera backend through Bytedeco OpenCV
+  - platform-specific OpenCV native runtime download/cache
   - `webcam-capture` fallback backend for non-macOS platforms
   - preferred camera config
-  - JPEG frame encoding
+  - H.264 frame encoding/decoding through `dev.nexbit:javah264`
+  - local JPEG preview encoding
   - UDP client
   - remote frame reassembly/store
   - safe camera-backend fallback so Apple Silicon/macOS does not crash when opening settings
@@ -100,20 +101,21 @@ Verified:
 2. Client sends `ClientHello` over `bitcam:control`.
 3. Server creates a session secret and replies with `ServerWelcome`.
 4. Client opens UDP connection to the advertised endpoint.
-5. Client streams JPEG frames over fragmented UDP packets.
+5. Client streams H.264 frames over fragmented UDP packets.
 6. Server forwards fragments only to nearby subscribed viewers.
 7. Viewer client reassembles frames and renders them above the streamer.
 
 ## Current transport choice
 
-The first implementation uses:
+The current implementation uses:
 
-- JPEG intra-frames over UDP
+- H.264 Annex-B access units over UDP
 - MTU-safe fragmentation
+- `javah264`/OpenH264 for client encode/decode
 - session auth through server-issued secret
 - server-side proximity fan-out
 
-This is not the final codec strategy. A later evolution can replace JPEG with H.264 or another low-latency codec without changing the signaling/session shape.
+The local self-preview still uses JPEG because it is not transmitted and does not need the inter-frame H.264 path.
 
 ## Operational note
 
@@ -127,7 +129,7 @@ This is not the final codec strategy. A later evolution can replace JPEG with H.
 - initial implementation targets visually-lossless-at-billboard-size quality
 - clients connect to one server UDP endpoint; no direct client-to-client media transport
 - Paper remains server-only
-- current macOS camera path uses JavaCV/OpenCV; `webcam-capture` remains only as a fallback backend, because its default BridJ/OpenIMAJ path is not safe on Apple Silicon
+- current camera path uses OpenCV `VideoCapture`; `webcam-capture` remains only as a fallback backend, because its default BridJ/OpenIMAJ path is not safe on Apple Silicon
 
 ## Next technical upgrades
 
@@ -136,6 +138,6 @@ This is not the final codec strategy. A later evolution can replace JPEG with H.
 - partial frame drop under pressure
 - stream permissions and moderation
 - optional encryption for media payloads
-- codec abstraction for H.264/other low-latency encoders
-- package/distribution strategy for JavaCV native runtime on client releases
+- camera device name enumeration separate from OpenCV index probing
+- native download UX, retry policy, and integrity checks
 - integration tests across Fabric/NeoForge/Paper combinations
