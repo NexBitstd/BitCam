@@ -8,6 +8,12 @@ import java.awt.image.BufferedImage;
 
 /** Shared pixel helpers used by both encoders (scaling) and decoders (post-processing). */
 final class VideoFrameSupport {
+    // The bubble is drawn small on screen, so the display texture never needs the full stream
+    // resolution. Capping the decoded frame here (on the decode thread) keeps the render thread's
+    // per-frame NativeImage fill + GPU upload cheap even for a 1080p60 stream — that cost scales with
+    // width*height*fps and is what makes high presets stutter for viewers.
+    private static final int MAX_DECODED_HEIGHT = 480;
+
     private VideoFrameSupport() {
     }
 
@@ -58,14 +64,13 @@ final class VideoFrameSupport {
         int sourceHeight,
         BitCamBubbleStyle style
     ) {
-        BufferedImage prepared = BitCamBubbleContentLayout.prepareImage(source, style);
+        BufferedImage prepared = clampHeight(BitCamBubbleContentLayout.prepareImage(source, style));
         int width = prepared.getWidth();
         int height = prepared.getHeight();
+        int[] argb = prepared.getRGB(0, 0, width, height, null, 0, width);
         int[] abgr = new int[width * height];
-        for (int y = 0; y < height; y++) {
-            for (int x = 0; x < width; x++) {
-                abgr[(y * width) + x] = argbToAbgr(prepared.getRGB(x, y));
-            }
+        for (int i = 0; i < argb.length; i++) {
+            abgr[i] = argbToAbgr(argb[i]);
         }
 
         if (style != null && style.shape() == BitCamBubbleShape.CIRCLE) {
@@ -73,6 +78,15 @@ final class VideoFrameSupport {
         }
 
         return new DecodedFrame(frameId, captureTimeMillis, sourceWidth, sourceHeight, width, height, abgr, style);
+    }
+
+    /** Downscales to {@link #MAX_DECODED_HEIGHT} (preserving aspect) when the frame is taller. */
+    private static BufferedImage clampHeight(BufferedImage image) {
+        if (image.getHeight() <= MAX_DECODED_HEIGHT) {
+            return image;
+        }
+        int width = Math.max(1, Math.round((float) image.getWidth() * MAX_DECODED_HEIGHT / image.getHeight()));
+        return scale(image, width, MAX_DECODED_HEIGHT);
     }
 
     private static void applyCircleMask(int[] abgr, int width, int height) {
