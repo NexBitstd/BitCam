@@ -27,10 +27,14 @@ public final class NativeCameraBackend implements CameraBackend {
             throw new IllegalStateException(noDevicesMessage());
         }
 
+        // Key cameras by NAME, not the nokhwa ordinal: on macOS the query order isn't stable across
+        // launches (virtual and Continuity cameras reshuffle it), so an ordinal saved in the config
+        // would later point at a different camera. Sorting by name also keeps the dropdown from jumping.
         List<CameraDeviceInfo> result = new ArrayList<>(devices.size());
         for (CameraDevice device : devices) {
-            result.add(new CameraDeviceInfo(Integer.toString(device.index()), device.name()));
+            result.add(new CameraDeviceInfo(device.name(), device.name()));
         }
+        result.sort(Comparator.comparing(CameraDeviceInfo::name, String.CASE_INSENSITIVE_ORDER));
         return result;
     }
 
@@ -78,13 +82,17 @@ public final class NativeCameraBackend implements CameraBackend {
 
         if (preferredCameraId != null && !preferredCameraId.isBlank()) {
             for (CameraDevice device : devices) {
-                if (preferredCameraId.equals(Integer.toString(device.index())) || preferredCameraId.equals(device.name())) {
+                if (preferredCameraId.equals(device.name())) {
                     return device.index();
                 }
             }
         }
 
-        return devices.getFirst().index();
+        // No (valid) preference: pick the first camera by name so it matches the dropdown's order.
+        return devices.stream()
+            .min(Comparator.comparing(CameraDevice::name, String.CASE_INSENSITIVE_ORDER))
+            .map(CameraDevice::index)
+            .orElseGet(() -> devices.getFirst().index());
     }
 
     private static String noDevicesMessage() {
