@@ -104,18 +104,6 @@ public final class BitCamClientCoordinator implements AutoCloseable {
         return CameraCatalog.isInitializing();
     }
 
-    public boolean isDownloadingCameraLibraries() {
-        return CameraLibraryManager.isDownloading();
-    }
-
-    public int cameraLibraryDownloadProgress() {
-        return CameraLibraryManager.downloadProgressPercent();
-    }
-
-    public String cameraLibraryDownloadFailure() {
-        return CameraLibraryManager.failureMessage();
-    }
-
     public boolean remotePreviewEnabled() {
         return this.config.remotePreviewEnabled();
     }
@@ -279,14 +267,7 @@ public final class BitCamClientCoordinator implements AutoCloseable {
                 Thread.sleep(100L);
             } catch (InterruptedException exception) {
                 Thread.currentThread().interrupt();
-                throw new IllegalStateException("Interrupted while waiting for camera libraries.", exception);
-            }
-        }
-
-        if (!CameraLibraryManager.isReady()) {
-            String failureMessage = CameraLibraryManager.failureMessage();
-            if (!failureMessage.isBlank()) {
-                throw new IllegalStateException(failureMessage);
+                throw new IllegalStateException("Interrupted while waiting for the camera backend.", exception);
             }
         }
     }

@@ -1,9 +1,7 @@
 package dev.nexbit.bitcam.clientcommon;
 
 import java.nio.file.Path;
-import java.util.ArrayList;
 import java.util.List;
-import java.util.Locale;
 
 public final class CameraCatalog {
     private static volatile boolean backendConfigured;
@@ -15,6 +13,10 @@ public final class CameraCatalog {
     private CameraCatalog() {
     }
 
+    /**
+     * Warms up the native camera backend off the game thread. The javah264 native is bundled in the
+     * jar (no download), so this just loads it and enumerates once.
+     */
     public static void prewarm(Path cacheDir) {
         if (backendConfigured || initInProgress) {
             return;
@@ -22,10 +24,6 @@ public final class CameraCatalog {
         initInProgress = true;
         Thread thread = new Thread(() -> {
             try {
-                // Ensure platform natives are available — downloads if not bundled.
-                CameraLibraryManager.ensureReady(cacheDir);
-                // Apply the native classloader so JavaCPP can find extracted libs.
-                CameraLibraryManager.applyToThread();
                 ensureBackendConfigured();
             } finally {
                 initInProgress = false;
@@ -36,14 +34,13 @@ public final class CameraCatalog {
     }
 
     public static boolean isInitializing() {
-        return (initInProgress && !backendConfigured) || CameraLibraryManager.isDownloading();
+        return initInProgress && !backendConfigured;
     }
 
     public static List<CameraDeviceInfo> listDevices() {
         if (isInitializing()) {
             return List.of();
         }
-        CameraLibraryManager.applyToThread();
         ensureBackendConfigured();
         if (!backendAvailable || backend == null) {
             return List.of();
@@ -79,7 +76,6 @@ public final class CameraCatalog {
         if (isInitializing()) {
             return List.of();
         }
-        CameraLibraryManager.applyToThread();
         ensureBackendConfigured();
         if (!backendAvailable || backend == null) {
             return List.of();
@@ -94,10 +90,9 @@ public final class CameraCatalog {
     }
 
     public static CameraCaptureSession openSession(String preferredName, CameraCaptureMode captureMode) {
-        CameraLibraryManager.applyToThread();
         ensureBackendConfigured();
         if (!backendAvailable || backend == null) {
-            throw new IllegalStateException(backendStatusMessage.isBlank() ? "No compatible camera backend is available" : backendStatusMessage);
+            throw new IllegalStateException(backendStatusMessage.isBlank() ? "No camera backend is available" : backendStatusMessage);
         }
 
         try {
@@ -114,7 +109,6 @@ public final class CameraCatalog {
         if (isInitializing()) {
             return "";
         }
-        CameraLibraryManager.applyToThread();
         ensureBackendConfigured();
         return backendStatusMessage;
     }
@@ -137,56 +131,18 @@ public final class CameraCatalog {
         }
     }
 
+    // The native javah264 backend (nokhwa) is the only one on every platform. Listing devices both
+    // validates that the native loaded and confirms at least one camera is present.
     private static CameraBackend selectBackend() {
-        List<String> failures = new ArrayList<>();
-
-        for (CameraBackend candidate : candidateBackends(failures)) {
-            try {
-                List<CameraDeviceInfo> devices = candidate.listDevices();
-                if (devices.isEmpty()) {
-                    failures.add(candidate.backendName() + ": no camera devices were reported");
-                    continue;
-                }
-                return candidate;
-            } catch (Throwable throwable) {
-                failures.add(candidate.backendName() + ": " + summarize(throwable));
-            }
-        }
-
-        backendAvailable = false;
-        backendStatusMessage = "No compatible camera backend is available: " + String.join(" | ", failures);
-        return null;
-    }
-
-    private static List<CameraBackend> candidateBackends(List<String> failures) {
-        List<CameraBackend> candidates = new ArrayList<>(2);
-        if (isMacOs()) {
-            addBackendCandidate(candidates, failures, "OpenCV VideoCapture", OpenCvCameraBackend::new);
-            return List.copyOf(candidates);
-        }
-
-        // On Windows/Linux: try OpenCV first, then webcam-capture as fallback.
-        addBackendCandidate(candidates, failures, "OpenCV VideoCapture", OpenCvCameraBackend::new);
-        addBackendCandidate(candidates, failures, "webcam-capture", WebcamCaptureBackend::new);
-        return List.copyOf(candidates);
-    }
-
-    private static void addBackendCandidate(
-        List<CameraBackend> candidates,
-        List<String> failures,
-        String backendName,
-        BackendFactory factory
-    ) {
+        CameraBackend candidate = new NativeCameraBackend();
         try {
-            candidates.add(factory.create());
+            candidate.listDevices();
+            return candidate;
         } catch (Throwable throwable) {
-            failures.add(backendName + ": " + summarize(throwable));
+            backendAvailable = false;
+            backendStatusMessage = summarize(throwable);
+            return null;
         }
-    }
-
-    private static boolean isMacOs() {
-        String osName = System.getProperty("os.name", "").toLowerCase(Locale.ROOT);
-        return osName.contains("mac");
     }
 
     private static String summarize(Throwable throwable) {
@@ -201,10 +157,5 @@ public final class CameraCatalog {
         }
 
         return message;
-    }
-
-    @FunctionalInterface
-    private interface BackendFactory {
-        CameraBackend create();
     }
 }

@@ -17,9 +17,6 @@ fun versionProperty(name: String): String = versionProperties[name]
 val mcVersion = versionProperty("minecraft_version")
 val neoforgeVersion = versionProperty("neoforge_version")
 val devauthVersion = rootProject.property("devauth_version") as String
-val javacppVersion = rootProject.property("javacpp_version") as String
-val bytedecoOpenCvVersion = rootProject.property("bytedeco_opencv_version") as String
-val bytedecoOpenBlasVersion = rootProject.property("bytedeco_openblas_version") as String
 val javah264Version = rootProject.property("javah264_version") as String
 val modId = rootProject.property("mod_id") as String
 val modName = rootProject.property("mod_name") as String
@@ -42,42 +39,16 @@ val serverCommonMain = serverCommonSourceSets.named("main").get()
 val sharedClientJavaDir = rootProject.file("versions/shared/src/client/java")
 val sharedClientResourcesDir = rootProject.file("versions/shared/src/client/resources")
 val sharedServerJavaDir = rootProject.file("versions/shared/src/server/java")
-// The dev runtime only needs the natives for the machine it runs on; end users download just their
-// own platform's natives at runtime (see CameraLibraryManager). This mirrors detectClassifier().
-val hostBytedecoClassifier = run {
-    val osName = System.getProperty("os.name", "").lowercase()
-    val osArch = System.getProperty("os.arch", "").lowercase()
-    val isArm = osArch.contains("aarch64") || osArch.contains("arm")
-    when {
-        osName.contains("win") -> "windows-x86_64"
-        osName.contains("mac") -> if (isArm) "macosx-arm64" else "macosx-x86_64"
-        else -> if (isArm) "linux-arm64" else "linux-x86_64"
-    }
-}
-val bytedecoDesktopClassifiers = listOf(hostBytedecoClassifier)
-val openCvBundledLibraries = listOf(
-    "org.bytedeco:opencv:$bytedecoOpenCvVersion",
-    "org.bytedeco:openblas:$bytedecoOpenBlasVersion",
-    "org.bytedeco:javacpp:$javacppVersion"
-)
-val webcamCaptureLibraries = listOf(
-    "com.github.sarxos:webcam-capture:0.3.12",
-    "com.nativelibs4java:bridj:0.7.0"
-)
+// javah264 bundles its own per-platform natives (camera + H.264) inside the jar; no separate native
+// classifiers to juggle.
 val javaH264Library = "dev.nexbit:javah264:$javah264Version"
-val openCvNativeRuntimeLibraries = bytedecoDesktopClassifiers.flatMap { classifier ->
-    listOf(
-        "org.bytedeco:javacpp:$javacppVersion:$classifier",
-        "org.bytedeco:openblas:$bytedecoOpenBlasVersion:$classifier",
-        "org.bytedeco:opencv:$bytedecoOpenCvVersion:$classifier"
-    )
-}
 
 base {
     archivesName.set("${baseArchiveName}-neoforge-${mcVersion}")
 }
 
 repositories {
+    mavenLocal()
     maven("https://maven.pkg.github.com/NexBitstd/JavaH264") {
         name = "JavaH264GitHubPackages"
         credentials {
@@ -139,32 +110,12 @@ dependencies {
     additionalRuntimeClasspath(protocolProject)
     additionalRuntimeClasspath(serverCommonProject)
     additionalRuntimeClasspath(clientCommonProject)
-    webcamCaptureLibraries.forEach { notation ->
-        additionalRuntimeClasspath(notation)
-    }
-    openCvBundledLibraries.forEach { notation ->
-        additionalRuntimeClasspath(notation)
-    }
     additionalRuntimeClasspath(javaH264Library)
-    openCvNativeRuntimeLibraries.forEach { notation ->
-        additionalRuntimeClasspath(notation)
-    }
 
-    webcamCaptureLibraries.forEach { notation ->
-        implementation(notation)
-        jarJar(notation)
-    }
     jarJar("com.electronwill.night-config:toml:3.6.7")
     jarJar("com.electronwill.night-config:core:3.6.7")
-    openCvBundledLibraries.forEach { notation ->
-        runtimeOnly(notation)
-        jarJar(notation)
-    }
     runtimeOnly(javaH264Library)
     jarJar(javaH264Library)
-    openCvNativeRuntimeLibraries.forEach { notation ->
-        runtimeOnly(notation)
-    }
     runtimeOnly("me.djtheredstoner:DevAuth-neoforge:$devauthVersion")
 }
 

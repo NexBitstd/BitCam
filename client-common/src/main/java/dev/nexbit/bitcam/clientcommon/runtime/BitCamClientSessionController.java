@@ -159,17 +159,8 @@ public final class BitCamClientSessionController implements AutoCloseable {
             return "No webcams detected.";
         }
 
-        String libraryFailure = this.coordinator.cameraLibraryDownloadFailure();
-        if (!libraryFailure.isBlank()) {
-            return libraryFailure;
-        }
-
-        if (this.coordinator.isDownloadingCameraLibraries()) {
-            return "BitCam is downloading camera libraries... " + this.coordinator.cameraLibraryDownloadProgress() + "%";
-        }
-
         if (this.coordinator.isCameraInitializing()) {
-            return "BitCam is still preparing camera libraries.";
+            return "BitCam is still starting the camera backend.";
         }
 
         String statusMessage = this.coordinator.cameraStatusMessage();

@@ -1187,28 +1187,6 @@ public final class BitCamSettingsScreen extends Screen {
         int top = this.coordinator.needsInitialSetup() ? CONTENT_TOP + 304 : CONTENT_TOP + 246;
         int width = (this.contentControlX() + this.contentControlWidth()) - left;
 
-        if (this.coordinator.isDownloadingCameraLibraries()) {
-            int pct = this.coordinator.cameraLibraryDownloadProgress();
-            String label = Component.translatable("screen.bitcam.camera.libs_downloading", pct).getString();
-            guiGraphics.drawString(this.font, label, left, top, 0x80C8FF, false);
-            // Progress bar
-            int barY = top + 12;
-            int barWidth = width;
-            guiGraphics.fill(left, barY, left + barWidth, barY + 4, 0x40FFFFFF);
-            guiGraphics.fill(left, barY, left + Math.round(barWidth * pct / 100f), barY + 4, 0xFF80C8FF);
-            return;
-        }
-
-        String failureMessage = this.coordinator.cameraLibraryDownloadFailure();
-        if (!failureMessage.isBlank()) {
-            for (FormattedCharSequence line : this.font.split(
-                Component.translatable("screen.bitcam.camera.libs_failed", failureMessage), width)) {
-                guiGraphics.drawString(this.font, line, left, top, 0xE0A7AB, false);
-                top += 10;
-            }
-            return;
-        }
-
         String statusMessage = this.coordinator.cameraStatusMessage();
         if (statusMessage.isBlank() && !this.cameras.isEmpty()) {
             return;
@@ -1298,10 +1276,8 @@ public final class BitCamSettingsScreen extends Screen {
             return Component.translatable("screen.bitcam.camera.mode.auto");
         }
 
-        if (!this.supportedCameraModes.contains(mode)) {
-            return Component.translatable("screen.bitcam.camera.mode.unsupported", mode.label());
-        }
-
+        // Modes come straight from the camera's real capabilities now, so there is nothing to flag as
+        // a fallback — just show the mode.
         return Component.literal(mode.label());
     }
 
