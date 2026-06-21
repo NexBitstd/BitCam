@@ -60,6 +60,10 @@ public final class BitCamSettingsScreen extends Screen {
     private static final int STAGE_BOTTOM_PADDING = 70;
     private static final int LABEL_COLUMN_WIDTH = 120;
     private static final int LABEL_CONTROL_GAP = 16;
+    private static final int BRAND_LOGO_SIZE = 20;
+    private static final int BRAND_TEXT_GAP = 8;
+    private static final ResourceLocation BRAND_LOGO_ICON = ResourceLocation.fromNamespaceAndPath("bitcam", "textures/gui/logoicon.png");
+    private static final ResourceLocation CLOSE_ICON = ResourceLocation.fromNamespaceAndPath("bitcam", "textures/gui/close.png");
 
     private final Screen parent;
     private final Minecraft client;
@@ -212,7 +216,8 @@ public final class BitCamSettingsScreen extends Screen {
         int buttonY = TOP_BAR_Y + 4;
 
         Component bitCamLabel = Component.literal("BitCam").withStyle(ChatFormatting.BOLD);
-        this.addRenderableWidget(new StringWidget(SIDE_PADDING, buttonY + 7, this.font.width(bitCamLabel), 10, bitCamLabel, this.font));
+        int brandTextX = SIDE_PADDING + BRAND_LOGO_SIZE + BRAND_TEXT_GAP;
+        this.addRenderableWidget(new StringWidget(brandTextX, buttonY + 7, this.font.width(bitCamLabel), 10, bitCamLabel, this.font));
 
         int tabsWidth = (Tab.values().length * TAB_WIDTH) + ((Tab.values().length - 1) * 6);
         int buttonX = (this.width - tabsWidth) / 2;
@@ -231,10 +236,8 @@ public final class BitCamSettingsScreen extends Screen {
         }
 
         int closeWidth = 20;
-        int quickWidth = 42;
         int toggleWidth = 20;
-        int quickX = this.width - SIDE_PADDING - closeWidth - 6 - quickWidth;
-        int toggleX = quickX - 6 - toggleWidth;
+        int toggleX = this.width - SIDE_PADDING - closeWidth - 6 - toggleWidth;
         int previewToggleX = toggleX - 6 - toggleWidth;
 
         this.topTogglePreviewButton = this.addStyledWidget(
@@ -263,20 +266,13 @@ public final class BitCamSettingsScreen extends Screen {
         this.topToggleStreamingButton.active = !this.cameras.isEmpty();
 
         this.addStyledWidget(
-            Button.builder(this.quickActionLabel(), ignored -> this.handleQuickAction())
-                .bounds(quickX, buttonY, quickWidth, 20)
-                .build(),
-            Component.empty(),
-            WidgetSkin.TOP_ACTION,
-            false
-        );
-        this.addStyledWidget(
-            Button.builder(Component.literal("X"), ignored -> this.onClose())
+            Button.builder(Component.empty(), ignored -> this.onClose())
                 .bounds(this.width - SIDE_PADDING - closeWidth, buttonY, closeWidth, 20)
                 .build(),
             Component.empty(),
             WidgetSkin.TOP_ACTION,
-            false
+            false,
+            CLOSE_ICON
         );
     }
 
@@ -697,30 +693,6 @@ public final class BitCamSettingsScreen extends Screen {
         return this.addRenderableWidget(widget);
     }
 
-    private Component quickActionLabel() {
-        return switch (this.activeTab) {
-            case CAMERA -> Component.literal("REF");
-            case BUBBLE -> Component.literal("VIEW");
-            case PLAYERS -> Component.literal("SYNC");
-        };
-    }
-
-    private void handleQuickAction() {
-        switch (this.activeTab) {
-            case CAMERA -> {
-                this.cameras = this.coordinator.refreshCameras();
-                this.init();
-            }
-            case BUBBLE -> this.refreshPreviewSource();
-            case PLAYERS -> {
-                if (this.playerCameraList != null) {
-                    this.playerCameraList.refreshEntries();
-                }
-                this.listRefreshCooldown = 20;
-            }
-        }
-    }
-
     private int contentControlX() {
         return this.contentLabelX() + this.contentLabelWidth() + LABEL_CONTROL_GAP;
     }
@@ -848,6 +820,26 @@ public final class BitCamSettingsScreen extends Screen {
             int columnRight = this.settingsColumnRight() + 18;
             guiGraphics.fill(columnLeft, CONTENT_TOP - 12, columnRight, this.height - 46, 0x14000000);
         }
+
+        this.renderBrandLogo(guiGraphics);
+    }
+
+    private void renderBrandLogo(GuiGraphics guiGraphics) {
+        int boxX = SIDE_PADDING;
+        int boxY = TOP_BAR_Y + 4;
+        int boxSize = BRAND_LOGO_SIZE;
+
+        guiGraphics.fill(boxX, boxY, boxX + boxSize, boxY + boxSize, 0xFF484E57);
+        guiGraphics.fill(boxX + 1, boxY + 1, boxX + boxSize - 1, boxY + boxSize - 1, 0xB22A2E35);
+        guiGraphics.fill(boxX + 1, boxY + boxSize - 2, boxX + boxSize - 1, boxY + boxSize - 1, 0x5040474F);
+
+        // logoicon.png is a 30x16 sheet whose "B>" mark sits in the (9,4)-(20,11) content box;
+        // draw just that region, scaled up to sit centred inside the brand box.
+        int iconW = 16;
+        int iconH = 10;
+        int iconX = boxX + (boxSize - iconW) / 2;
+        int iconY = boxY + (boxSize - iconH) / 2;
+        guiGraphics.blit(RenderPipelines.GUI_TEXTURED, BRAND_LOGO_ICON, iconX, iconY, 9, 4, iconW, iconH, 11, 7, 30, 16);
     }
 
     private void renderChromeForeground(GuiGraphics guiGraphics) {
