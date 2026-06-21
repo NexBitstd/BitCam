@@ -36,7 +36,7 @@ public record BitCamServerConfig(
             boolean fileExists = Files.exists(file);
 
             if (!fileExists) {
-                BitCamServerConfig defaults = new BitCamServerConfig("127.0.0.1", 35475, 24, defaultPresets(), "sd", 1200);
+                BitCamServerConfig defaults = new BitCamServerConfig("127.0.0.1", 35475, 24, defaultPresets(), "standard", 1200);
                 defaults.save(file);
                 return defaults;
             }
@@ -131,11 +131,14 @@ public record BitCamServerConfig(
         return List.copyOf(presets);
     }
 
+    // The bubble is drawn small and the viewer caps its texture at 480p, so streaming higher than that
+    // only burns encode/network/decode for no visible gain. These three cover the useful range; 480p@30
+    // is the practical ceiling, and 60fps isn't worth it for a talking-head bubble.
     private static List<BitCamServerQualityPreset> defaultPresets() {
         return List.of(
-            new BitCamServerQualityPreset(new BitCamStreamQualityProfile("sd", "SD", 320, 180, 15, 0.85F), ""),
-            new BitCamServerQualityPreset(new BitCamStreamQualityProfile("hd", "HD", 640, 360, 20, 0.92F), ""),
-            new BitCamServerQualityPreset(new BitCamStreamQualityProfile("fhd", "FHD", 1280, 720, 24, 0.96F), "op:2")
+            new BitCamServerQualityPreset(new BitCamStreamQualityProfile("low", "Low", 320, 180, 24, 0.85F), ""),
+            new BitCamServerQualityPreset(new BitCamStreamQualityProfile("standard", "Standard", 640, 360, 30, 0.92F), ""),
+            new BitCamServerQualityPreset(new BitCamStreamQualityProfile("high", "High", 854, 480, 30, 0.95F), "")
         );
     }
 
