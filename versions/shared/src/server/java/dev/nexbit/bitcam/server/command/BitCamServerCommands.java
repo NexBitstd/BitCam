@@ -9,6 +9,10 @@ import net.minecraft.commands.CommandSourceStack;
 import net.minecraft.commands.Commands;
 import net.minecraft.network.chat.Component;
 import net.minecraft.server.level.ServerPlayer;
+//#if MC>=12111
+//$$ import net.minecraft.server.permissions.Permission;
+//$$ import net.minecraft.server.permissions.PermissionLevel;
+//#endif
 
 public final class BitCamServerCommands {
     private BitCamServerCommands() {}
@@ -16,7 +20,7 @@ public final class BitCamServerCommands {
     public static void register(CommandDispatcher<CommandSourceStack> dispatcher, Supplier<BitCamServerCoordinator> coordinator) {
         dispatcher.register(
             Commands.literal("bitcam")
-                .requires(source -> source.hasPermission(2))
+                .requires(source -> hasPermission(source, 2))
                 .then(Commands.literal("debug")
                     .executes(context -> {
                         sendDebug(context.getSource(), coordinator.get(), false);
@@ -46,5 +50,13 @@ public final class BitCamServerCommands {
         for (String line : lines) {
             source.sendSuccess(() -> Component.literal(line), false);
         }
+    }
+
+    private static boolean hasPermission(CommandSourceStack source, int level) {
+        //#if MC>=12111
+        //$$ return source.permissions().hasPermission(new Permission.HasCommandLevel(PermissionLevel.byId(level)));
+        //#else
+        return source.hasPermission(level);
+        //#endif
     }
 }

@@ -1,6 +1,7 @@
 package dev.nexbit.bitcam.client.ui;
 
 import com.mojang.blaze3d.platform.NativeImage;
+import dev.nexbit.bitcam.client.render.BitCamClientRenderCompat;
 import dev.nexbit.bitcam.clientcommon.BitCamBubblePlacement;
 import dev.nexbit.bitcam.clientcommon.BitCamBubbleContentLayout;
 import dev.nexbit.bitcam.clientcommon.BitCamBubbleVisuals;
@@ -41,7 +42,11 @@ import net.minecraft.client.gui.screens.Screen;
 import net.minecraft.client.gui.screens.inventory.InventoryScreen;
 import net.minecraft.client.multiplayer.ClientLevel;
 import net.minecraft.client.player.AbstractClientPlayer;
+//#if MC>=12106
 import net.minecraft.client.renderer.RenderPipelines;
+//#elseif MC>=12102
+//$$ import net.minecraft.client.renderer.RenderType;
+//#endif
 import net.minecraft.client.renderer.texture.DynamicTexture;
 import net.minecraft.network.chat.Component;
 import net.minecraft.resources.ResourceLocation;
@@ -166,16 +171,31 @@ public final class BitCamSettingsScreen extends Screen {
     }
 
     @Override
+    //#if MC>=260100
+    //$$ public void extractRenderState(net.minecraft.client.gui.GuiGraphicsExtractor guiGraphics, int mouseX, int mouseY, float partialTick) {
+    //#else
     public void render(GuiGraphics guiGraphics, int mouseX, int mouseY, float partialTick) {
+    //#endif
         this.renderSceneBackdrop(guiGraphics, mouseX, mouseY);
         this.renderChromeBackdrop(guiGraphics);
+        //#if MC>=260100
+        //$$ super.extractRenderState(guiGraphics, mouseX, mouseY, partialTick);
+        //#else
         super.render(guiGraphics, mouseX, mouseY, partialTick);
+        //#endif
         this.renderStyledWidgets(guiGraphics, mouseX, mouseY);
         this.renderChromeForeground(guiGraphics);
     }
 
     @Override
+    //#if MC>=12109
+    //$$ public boolean mouseClicked(net.minecraft.client.input.MouseButtonEvent event, boolean doubleClick) {
+    //$$     double mouseX = event.x();
+    //$$     double mouseY = event.y();
+    //$$     int button = event.button();
+    //#else
     public boolean mouseClicked(double mouseX, double mouseY, int button) {
+    //#endif
         if (this.openSelect != null) {
             FlatSelectWidget<?> select = this.openSelect;
             if (select.handleDropdownClick(mouseX, mouseY, button)) {
@@ -190,7 +210,11 @@ public final class BitCamSettingsScreen extends Screen {
             this.openSelect = null;
         }
 
+        //#if MC>=12109
+        //$$ return super.mouseClicked(event, doubleClick);
+        //#else
         return super.mouseClicked(mouseX, mouseY, button);
+        //#endif
     }
 
     @Override
@@ -203,13 +227,22 @@ public final class BitCamSettingsScreen extends Screen {
     }
 
     @Override
+    //#if MC>=12109
+    //$$ public boolean keyPressed(net.minecraft.client.input.KeyEvent event) {
+    //$$     int keyCode = event.key();
+    //#else
     public boolean keyPressed(int keyCode, int scanCode, int modifiers) {
+    //#endif
         if (keyCode == 256 && this.openSelect != null) {
             this.openSelect.closeDropdown();
             return true;
         }
 
+        //#if MC>=12109
+        //$$ return super.keyPressed(event);
+        //#else
         return super.keyPressed(keyCode, scanCode, modifiers);
+        //#endif
     }
 
     private void addCommonWidgets() {
@@ -839,7 +872,13 @@ public final class BitCamSettingsScreen extends Screen {
         int iconH = 10;
         int iconX = boxX + (boxSize - iconW) / 2;
         int iconY = boxY + (boxSize - iconH) / 2;
+        //#if MC>=12106
         guiGraphics.blit(RenderPipelines.GUI_TEXTURED, BRAND_LOGO_ICON, iconX, iconY, 9, 4, iconW, iconH, 11, 7, 30, 16);
+        //#elseif MC>=12102
+        //$$ guiGraphics.blit(RenderType::guiTextured, BRAND_LOGO_ICON, iconX, iconY, 9, 4, iconW, iconH, 11, 7, 30, 16);
+        //#else
+        //$$ guiGraphics.blit(BRAND_LOGO_ICON, iconX, iconY, iconW, iconH, 9, 4, 11, 7, 30, 16);
+        //#endif
     }
 
     private void renderChromeForeground(GuiGraphics guiGraphics) {
@@ -938,7 +977,13 @@ public final class BitCamSettingsScreen extends Screen {
             int iconSize = 16;
             int iconX = x + (width - iconSize) / 2;
             int iconY = y + (height - iconSize) / 2;
+            //#if MC>=12106
             guiGraphics.blit(RenderPipelines.GUI_TEXTURED, styledWidget.icon, iconX, iconY, 0, 0, iconSize, iconSize, 16, 16);
+            //#elseif MC>=12102
+            //$$ guiGraphics.blit(RenderType::guiTextured, styledWidget.icon, iconX, iconY, 0, 0, iconSize, iconSize, 16, 16);
+            //#else
+            //$$ guiGraphics.blit(styledWidget.icon, iconX, iconY, 0, 0, iconSize, iconSize, 16, 16);
+            //#endif
         } else {
             Component text = this.ellipsize(widget.getMessage(), width - (styledWidget.skin == WidgetSkin.VALUE ? 18 : 10));
             guiGraphics.drawCenteredString(this.font, text, x + (width / 2), y + 6, textColor);
@@ -1042,6 +1087,11 @@ public final class BitCamSettingsScreen extends Screen {
         guiGraphics.fill(actorCenterX - 58, floorY + 6, actorCenterX + 58, floorY + 10, 0x16000000);
 
         if (player != null) {
+            //#if MC>=260100
+            //$$ InventoryScreen.extractEntityInInventoryFollowsMouse(
+            //$$     guiGraphics, actorX, actorY, actorRight, actorBottom, modelSize, previewEntityYOffset, (float) mouseX, (float) mouseY, player
+            //$$ );
+            //#else
             InventoryScreen.renderEntityInInventoryFollowsMouse(
                 guiGraphics,
                 actorX,
@@ -1054,6 +1104,7 @@ public final class BitCamSettingsScreen extends Screen {
                 mouseY,
                 player
             );
+            //#endif
         } else {
             guiGraphics.drawCenteredString(
                 this.font,
@@ -1367,7 +1418,11 @@ public final class BitCamSettingsScreen extends Screen {
         }
 
         @Override
+        //#if MC>=260100
+        //$$ protected void extractWidgetRenderState(net.minecraft.client.gui.GuiGraphicsExtractor guiGraphics, int mouseX, int mouseY, float partialTick) {
+        //#else
         protected void renderWidget(GuiGraphics guiGraphics, int mouseX, int mouseY, float partialTick) {
+        //#endif
         }
 
         @Override
@@ -1376,7 +1431,14 @@ public final class BitCamSettingsScreen extends Screen {
         }
 
         @Override
+        //#if MC>=12109
+        //$$ public boolean mouseClicked(net.minecraft.client.input.MouseButtonEvent event, boolean doubleClick) {
+        //$$     double mouseX = event.x();
+        //$$     double mouseY = event.y();
+        //$$     int button = event.button();
+        //#else
         public boolean mouseClicked(double mouseX, double mouseY, int button) {
+        //#endif
             if (!this.active || !this.visible || button != 0 || !this.isMouseOver(mouseX, mouseY)) {
                 return false;
             }
@@ -1518,7 +1580,11 @@ public final class BitCamSettingsScreen extends Screen {
         }
 
         @Override
+        //#if MC>=260100
+        //$$ public void extractWidgetRenderState(net.minecraft.client.gui.GuiGraphicsExtractor guiGraphics, int mouseX, int mouseY, float partialTick) {
+        //#else
         public void renderWidget(GuiGraphics guiGraphics, int mouseX, int mouseY, float partialTick) {
+        //#endif
             int x = this.getX();
             int y = this.getY();
             int width = this.getWidth();
@@ -1565,10 +1631,18 @@ public final class BitCamSettingsScreen extends Screen {
         }
 
         @Override
+        //#if MC>=260100
+        //$$ protected void extractListBackground(net.minecraft.client.gui.GuiGraphicsExtractor guiGraphics) {}
+        //#else
         protected void renderListBackground(GuiGraphics guiGraphics) {}
+        //#endif
 
         @Override
+        //#if MC>=260100
+        //$$ protected void extractListSeparators(net.minecraft.client.gui.GuiGraphicsExtractor guiGraphics) {}
+        //#else
         protected void renderListSeparators(GuiGraphics guiGraphics) {}
+        //#endif
 
         protected int getScrollbarPosition() {
             return this.leftPos + this.width - 6;
@@ -1594,6 +1668,17 @@ public final class BitCamSettingsScreen extends Screen {
             }
 
             @Override
+            //#if MC>=12109
+            //#if MC>=260100
+            //$$ public void extractContent(net.minecraft.client.gui.GuiGraphicsExtractor guiGraphics, int mouseX, int mouseY, boolean hovering, float partialTick) {
+            //#else
+            //$$ public void renderContent(GuiGraphics guiGraphics, int mouseX, int mouseY, boolean hovering, float partialTick) {
+            //#endif
+            //$$     int top = this.getY();
+            //$$     int left = this.getX();
+            //$$     int width = this.getWidth();
+            //$$     int height = this.getHeight();
+            //#else
             public void render(
                 GuiGraphics guiGraphics,
                 int index,
@@ -1606,6 +1691,7 @@ public final class BitCamSettingsScreen extends Screen {
                 boolean hovering,
                 float partialTick
             ) {
+            //#endif
                 boolean hidden = BitCamSettingsScreen.this.coordinator.isPlayerHidden(this.playerId);
 
                 // Row background
@@ -1616,9 +1702,21 @@ public final class BitCamSettingsScreen extends Screen {
                 int headSize = 16;
                 int headX = left + 6;
                 int headY = top + (height - headSize) / 2;
+                //#if MC>=12109
+                //$$ ResourceLocation skin = this.player.getSkin().body().texturePath();
+                //#else
                 ResourceLocation skin = this.player.getSkin().texture();
+                //#endif
+                //#if MC>=12106
                 guiGraphics.blit(RenderPipelines.GUI_TEXTURED, skin, headX, headY, headSize, headSize, 8, 8, 8, 8, 64, 64);
                 guiGraphics.blit(RenderPipelines.GUI_TEXTURED, skin, headX, headY, headSize, headSize, 40, 8, 8, 8, 64, 64);
+                //#elseif MC>=12102
+                //$$ guiGraphics.blit(RenderType::guiTextured, skin, headX, headY, headSize, headSize, 8, 8, 8, 8, 64, 64);
+                //$$ guiGraphics.blit(RenderType::guiTextured, skin, headX, headY, headSize, headSize, 40, 8, 8, 8, 64, 64);
+                //#else
+                //$$ guiGraphics.blit(skin, headX, headY, headSize, headSize, 8, 8, 8, 8, 64, 64);
+                //$$ guiGraphics.blit(skin, headX, headY, headSize, headSize, 40, 8, 8, 8, 64, 64);
+                //#endif
 
                 // Player name
                 int nameX = headX + headSize + 8;
@@ -1648,7 +1746,12 @@ public final class BitCamSettingsScreen extends Screen {
             }
 
             @Override
+            //#if MC>=12109
+            //$$ public boolean mouseClicked(net.minecraft.client.input.MouseButtonEvent event, boolean doubleClick) {
+            //$$     int button = event.button();
+            //#else
             public boolean mouseClicked(double mouseX, double mouseY, int button) {
+            //#endif
                 if (button == 0) {
                     boolean hidden = BitCamSettingsScreen.this.coordinator.isPlayerHidden(this.playerId);
                     BitCamSettingsScreen.this.coordinator.setPlayerHidden(this.playerId, !hidden);
@@ -1683,7 +1786,7 @@ public final class BitCamSettingsScreen extends Screen {
 
             if (this.texture == null) {
                 this.textureId = ResourceLocation.fromNamespaceAndPath("bitcam", "preview/local");
-                this.texture = new DynamicTexture(() -> "bitcam/preview/local", 1, 1, false);
+                this.texture = BitCamClientRenderCompat.createDynamicTexture("bitcam/preview/local", 1, 1, false);
                 this.client.getTextureManager().register(this.textureId, this.texture);
             }
 
@@ -1733,7 +1836,7 @@ public final class BitCamSettingsScreen extends Screen {
                 this.texture.close();
             }
 
-            this.texture = new DynamicTexture(() -> "bitcam/preview/local", width, height, false);
+            this.texture = BitCamClientRenderCompat.createDynamicTexture("bitcam/preview/local", width, height, false);
             this.client.getTextureManager().register(this.textureId, this.texture);
             this.width = width;
             this.height = height;
@@ -1754,7 +1857,7 @@ public final class BitCamSettingsScreen extends Screen {
                     if ((dx * dx) + (dy * dy) <= radiusSquared) {
                         continue;
                     }
-                    image.setPixel(x, y, image.getPixel(x, y) & 0x00FFFFFF);
+                    BitCamClientRenderCompat.setPixel(image, x, y, BitCamClientRenderCompat.getPixel(image, x, y) & 0x00FFFFFF);
                 }
             }
         }
@@ -1786,7 +1889,7 @@ public final class BitCamSettingsScreen extends Screen {
             NativeImage image = new NativeImage(bufferedImage.getWidth(), bufferedImage.getHeight(), true);
             for (int y = 0; y < bufferedImage.getHeight(); y++) {
                 for (int x = 0; x < bufferedImage.getWidth(); x++) {
-                    image.setPixelABGR(x, y, argbToAbgr(bufferedImage.getRGB(x, y)));
+                    BitCamClientRenderCompat.setPixelAbgr(image, x, y, argbToAbgr(bufferedImage.getRGB(x, y)));
                 }
             }
             return image;

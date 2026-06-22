@@ -34,7 +34,12 @@ import net.minecraft.client.model.geom.ModelPart;
 import net.minecraft.client.player.AbstractClientPlayer;
 import net.minecraft.client.renderer.LightTexture;
 import net.minecraft.client.renderer.MultiBufferSource;
+//#if MC>=12111
+//$$ import net.minecraft.client.renderer.rendertype.RenderType;
+//$$ import net.minecraft.client.renderer.rendertype.RenderTypes;
+//#else
 import net.minecraft.client.renderer.RenderType;
+//#endif
 import net.minecraft.client.renderer.texture.DynamicTexture;
 import net.minecraft.client.renderer.texture.OverlayTexture;
 import net.minecraft.resources.ResourceLocation;
@@ -246,11 +251,19 @@ public final class BitCamBillboardRenderer implements AutoCloseable {
     ) {
         StreamTexture shapeTexture = this.getShapeTexture(shape);
         PoseStack.Pose pose = matrices.last();
+        //#if MC>=12111
+        //$$ VertexConsumer bubbleConsumer = consumers.getBuffer(RenderTypes.entityTranslucent(shapeTexture.textureId()));
+        //#else
         VertexConsumer bubbleConsumer = consumers.getBuffer(RenderType.entityTranslucent(shapeTexture.textureId()));
+        //#endif
         this.addQuad(bubbleConsumer, pose, halfWidth + borderPadding, halfHeight + borderPadding, -0.002F, visuals.borderArgb(), flipVerticalUv, flipHorizontalUv);
         this.addQuad(bubbleConsumer, pose, halfWidth + backgroundPadding, halfHeight + backgroundPadding, -0.001F, visuals.backgroundArgb(), flipVerticalUv, flipHorizontalUv);
 
+        //#if MC>=12111
+        //$$ VertexConsumer videoConsumer = consumers.getBuffer(RenderTypes.entityTranslucentEmissive(textureId));
+        //#else
         VertexConsumer videoConsumer = consumers.getBuffer(RenderType.entityTranslucentEmissive(textureId));
+        //#endif
         this.addQuad(videoConsumer, pose, halfWidth, halfHeight, 0.0F, 0x00FFFFFF | (videoAlpha << 24), flipVerticalUv, flipHorizontalUv);
     }
 
@@ -382,7 +395,7 @@ public final class BitCamBillboardRenderer implements AutoCloseable {
         int[] abgr = frame.abgrPixels();
         for (int y = 0; y < frame.pixelHeight(); y++) {
             for (int x = 0; x < frame.pixelWidth(); x++) {
-                image.setPixelABGR(x, y, abgr[(y * frame.pixelWidth()) + x]);
+                BitCamClientRenderCompat.setPixelAbgr(image, x, y, abgr[(y * frame.pixelWidth()) + x]);
             }
         }
 
@@ -424,7 +437,7 @@ public final class BitCamBillboardRenderer implements AutoCloseable {
 
     private StreamTexture createTexture(UUID streamerId) {
         ResourceLocation id = ResourceLocation.fromNamespaceAndPath(BitCamMetadata.MOD_ID, "stream/" + streamerId);
-        DynamicTexture texture = new DynamicTexture(() -> "bitcam/" + streamerId, 1, 1, false);
+        DynamicTexture texture = BitCamClientRenderCompat.createDynamicTexture("bitcam/" + streamerId, 1, 1, false);
         this.client.getTextureManager().register(id, texture);
         return new StreamTexture(id, texture);
     }
@@ -439,7 +452,7 @@ public final class BitCamBillboardRenderer implements AutoCloseable {
 
         StreamTexture resized = new StreamTexture(
             streamTexture.textureId(),
-            new DynamicTexture(() -> "bitcam/" + streamerId, width, height, false),
+            BitCamClientRenderCompat.createDynamicTexture("bitcam/" + streamerId, width, height, false),
             width,
             height
         );
@@ -454,9 +467,9 @@ public final class BitCamBillboardRenderer implements AutoCloseable {
         }
 
         ResourceLocation id = ResourceLocation.fromNamespaceAndPath(BitCamMetadata.MOD_ID, "stream/white");
-        DynamicTexture texture = new DynamicTexture(() -> "bitcam/white", 1, 1, false);
+        DynamicTexture texture = BitCamClientRenderCompat.createDynamicTexture("bitcam/white", 1, 1, false);
         NativeImage image = new NativeImage(1, 1, false);
-        image.setPixel(0, 0, 0xFFFFFFFF);
+        BitCamClientRenderCompat.setPixel(image, 0, 0, 0xFFFFFFFF);
         texture.setPixels(image);
         texture.upload();
         this.client.getTextureManager().register(id, texture);
@@ -474,14 +487,14 @@ public final class BitCamBillboardRenderer implements AutoCloseable {
         }
 
         ResourceLocation id = ResourceLocation.fromNamespaceAndPath(BitCamMetadata.MOD_ID, "stream/circle-mask");
-        DynamicTexture texture = new DynamicTexture(() -> "bitcam/circle-mask", 64, 64, true);
+        DynamicTexture texture = BitCamClientRenderCompat.createDynamicTexture("bitcam/circle-mask", 64, 64, true);
         NativeImage image = new NativeImage(64, 64, true);
         int radiusSquared = 31 * 31;
         for (int y = 0; y < 64; y++) {
             for (int x = 0; x < 64; x++) {
                 int dx = x - 31;
                 int dy = y - 31;
-                image.setPixel(x, y, (dx * dx + dy * dy) <= radiusSquared ? 0xFFFFFFFF : 0x00FFFFFF);
+                BitCamClientRenderCompat.setPixel(image, x, y, (dx * dx + dy * dy) <= radiusSquared ? 0xFFFFFFFF : 0x00FFFFFF);
             }
         }
         texture.setPixels(image);
@@ -504,7 +517,7 @@ public final class BitCamBillboardRenderer implements AutoCloseable {
                 float dx = (x + 0.5F) - centerX;
                 float dy = (y + 0.5F) - centerY;
                 if ((dx * dx) + (dy * dy) > radiusSquared) {
-                    image.setPixel(x, y, image.getPixel(x, y) & 0x00FFFFFF);
+                    BitCamClientRenderCompat.setPixel(image, x, y, BitCamClientRenderCompat.getPixel(image, x, y) & 0x00FFFFFF);
                 }
             }
         }
@@ -534,7 +547,7 @@ public final class BitCamBillboardRenderer implements AutoCloseable {
             NativeImage image = new NativeImage(bufferedImage.getWidth(), bufferedImage.getHeight(), true);
             for (int y = 0; y < bufferedImage.getHeight(); y++) {
                 for (int x = 0; x < bufferedImage.getWidth(); x++) {
-                    image.setPixelABGR(x, y, argbToAbgr(bufferedImage.getRGB(x, y)));
+                    BitCamClientRenderCompat.setPixelAbgr(image, x, y, argbToAbgr(bufferedImage.getRGB(x, y)));
                 }
             }
             return image;

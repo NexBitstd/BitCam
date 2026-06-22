@@ -14,10 +14,11 @@ data class BitCamVersionEntry(
     val loaders: List<String>,
     val properties: Map<String, String>
 ) {
-    val projectPath: String
-        get() = ":$projectPrefix"
-
-    fun loaderProjectPath(loader: String): String = "$projectPath:$loader"
+    fun loaderProjectPath(loader: String): String = when (loader) {
+        "fabric", "neoforge" -> ":client:$minecraftVersion-$loader"
+        "paper" -> ":paper:$minecraftVersion-paper"
+        else -> ":$projectPrefix:$loader"
+    }
 }
 
 fun discoverBitCamVersions(rootDir: File): List<BitCamVersionEntry> {
@@ -47,7 +48,13 @@ fun discoverBitCamVersions(rootDir: File): List<BitCamVersionEntry> {
                 )
             }
 
-            val loaders = loaderNames.filter { loader ->
+            val configuredLoaders = properties["loaders"]
+                ?.split(',')
+                ?.map(String::trim)
+                ?.filter(String::isNotEmpty)
+                ?: loaderNames
+
+            val loaders = configuredLoaders.filter { loader ->
                 versionDir.resolve(loader).isDirectory
             }
 
@@ -63,7 +70,9 @@ fun discoverBitCamVersions(rootDir: File): List<BitCamVersionEntry> {
                 properties = properties
             )
         }
-        .sortedBy { it.minecraftVersion }
+        .sortedWith { left, right ->
+            compareVersionSortKeys(versionSortKey(left.minecraftVersion), versionSortKey(right.minecraftVersion))
+        }
 }
 
 fun loadBitCamVersionProperties(project: Project): Map<String, String> {
@@ -74,6 +83,27 @@ fun loadBitCamVersionProperties(project: Project): Map<String, String> {
 fun toProjectPrefix(minecraftVersion: String): String {
     val sanitized = minecraftVersion.replace(invalidProjectSegment, "_").trim('_')
     return "mc$sanitized"
+}
+
+fun versionSortKey(version: String): List<Int> {
+    val parts = Regex("\\d+").findAll(version).map { it.value.toInt() }.toList()
+    return if (version.startsWith("1.")) {
+        listOf(0) + parts.drop(1)
+    } else {
+        listOf(1) + parts
+    }
+}
+
+fun compareVersionSortKeys(left: List<Int>, right: List<Int>): Int {
+    val maxSize = maxOf(left.size, right.size)
+    for (index in 0 until maxSize) {
+        val leftPart = left.getOrElse(index) { 0 }
+        val rightPart = right.getOrElse(index) { 0 }
+        if (leftPart != rightPart) {
+            return leftPart.compareTo(rightPart)
+        }
+    }
+    return 0
 }
 
 private fun resolveVersionDirectory(project: Project): File {

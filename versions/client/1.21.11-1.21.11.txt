@@ -1,0 +1,4 @@
+net.minecraft.resources.Identifier net.minecraft.resources.ResourceLocation
+net.minecraft.client.Camera position() getPosition()
+net.minecraft.client.Camera yRot() getYRot()
+net.minecraft.client.Camera xRot() getXRot()

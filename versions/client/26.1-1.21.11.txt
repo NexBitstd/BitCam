@@ -1,0 +1,4 @@
+net.minecraft.client.gui.GuiGraphicsExtractor net.minecraft.client.gui.GuiGraphics
+net.minecraft.util.LightCoordsUtil net.minecraft.client.renderer.LightTexture
+net.minecraft.client.gui.GuiGraphics text() drawString()
+net.minecraft.client.gui.GuiGraphics centeredText() drawCenteredString()

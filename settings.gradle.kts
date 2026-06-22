@@ -1,12 +1,13 @@
-import java.io.File
+    import java.io.File
 import java.util.Properties
 
 pluginManagement {
-    val essentialGradleToolkitVersion = "0.8.5-SNAPSHOT"
+    val essentialGradleToolkitVersion = "0.7.2"
     val fabricLoomVersion = providers.gradleProperty("fabric_loom_version").get()
     val moddevgradleVersion = providers.gradleProperty("moddevgradle_version").get()
     val paperweightUserdevVersion = providers.gradleProperty("paperweight_userdev_version").get()
     val runPaperVersion = providers.gradleProperty("run_paper_version").get()
+    val minotaurVersion = providers.gradleProperty("minotaur_version").get()
 
     repositories {
         google()
@@ -35,11 +36,13 @@ pluginManagement {
 
     plugins {
         id("gg.essential.defaults") version essentialGradleToolkitVersion
+        id("gg.essential.multi-version") version essentialGradleToolkitVersion
         id("gg.essential.multi-version.root") version essentialGradleToolkitVersion
         id("fabric-loom") version fabricLoomVersion
         id("net.neoforged.moddev") version moddevgradleVersion
         id("io.papermc.paperweight.userdev") version paperweightUserdevVersion
         id("xyz.jpenilla.run-paper") version runPaperVersion
+        id("com.modrinth.minotaur") version minotaurVersion
     }
 }
 
@@ -96,10 +99,11 @@ data class IncludedVersionSet(
     val projectPrefix: String,
     val loaders: List<String>
 ) {
-    val projectPath: String
-        get() = ":$projectPrefix"
-
-    fun loaderProjectPath(loader: String): String = "$projectPath:$loader"
+    fun loaderProjectPath(loader: String): String = when (loader) {
+        "fabric", "neoforge" -> ":client:$minecraftVersion-$loader"
+        "paper" -> ":paper:$minecraftVersion-paper"
+        else -> ":$projectPrefix:$loader"
+    }
 }
 
 fun discoverIncludedVersionSets(rootDir: File): List<IncludedVersionSet> {
@@ -130,7 +134,13 @@ fun discoverIncludedVersionSets(rootDir: File): List<IncludedVersionSet> {
                 )
             }
 
-            val loaders = listOf("fabric", "neoforge", "paper").filter { loader ->
+            val configuredLoaders = properties.getProperty("loaders")
+                ?.split(',')
+                ?.map(String::trim)
+                ?.filter(String::isNotEmpty)
+                ?: listOf("fabric", "neoforge", "paper")
+
+            val loaders = configuredLoaders.filter { loader ->
                 versionDir.resolve(loader).isDirectory
             }
 
@@ -145,17 +155,46 @@ fun discoverIncludedVersionSets(rootDir: File): List<IncludedVersionSet> {
                 loaders = loaders
             )
         }
-        .sortedBy { it.minecraftVersion }
+        .sortedWith { left, right ->
+            compareVersionSortKeys(versionSortKey(left.minecraftVersion), versionSortKey(right.minecraftVersion))
+        }
 }
 
-discoverIncludedVersionSets(rootDir).forEach { versionEntry ->
-    include(versionEntry.projectPath)
-    project(versionEntry.projectPath).projectDir = versionEntry.directory
+fun versionSortKey(version: String): List<Int> {
+    val parts = Regex("\\d+").findAll(version).map { it.value.toInt() }.toList()
+    return if (version.startsWith("1.")) {
+        listOf(0) + parts.drop(1)
+    } else {
+        listOf(1) + parts
+    }
+}
 
+fun compareVersionSortKeys(left: List<Int>, right: List<Int>): Int {
+    val maxSize = maxOf(left.size, right.size)
+    for (index in 0 until maxSize) {
+        val leftPart = left.getOrElse(index) { 0 }
+        val rightPart = right.getOrElse(index) { 0 }
+        if (leftPart != rightPart) {
+            return leftPart.compareTo(rightPart)
+        }
+    }
+    return 0
+}
+
+include(":client")
+project(":client").projectDir = rootDir.resolve("versions/client")
+project(":client").buildFileName = "root.gradle.kts"
+
+include(":paper")
+project(":paper").projectDir = rootDir.resolve("versions/paper")
+project(":paper").buildFileName = "root.gradle.kts"
+
+discoverIncludedVersionSets(rootDir).forEach { versionEntry ->
     versionEntry.loaders.forEach { loader ->
         val loaderProjectPath = versionEntry.loaderProjectPath(loader)
         include(loaderProjectPath)
         project(loaderProjectPath).projectDir = versionEntry.directory.resolve(loader)
-        project(loaderProjectPath).buildFileName = "../../shared/$loader.gradle.kts"
+        project(loaderProjectPath).buildFileName =
+            if (loader == "paper") "../../shared/paper.gradle.kts" else "../../shared/client.gradle.kts"
     }
 }

@@ -115,5 +115,8 @@ gradle-app.setting
 run/
 runs/
 
+# Paper sources/resources live in versions/paper; version-local paper dirs are only matrix anchors.
+versions/*/paper/src/
+
 # Avoid ignoring Gradle wrapper jar file (.jar files are usually ignored)
 !gradle-wrapper.jar

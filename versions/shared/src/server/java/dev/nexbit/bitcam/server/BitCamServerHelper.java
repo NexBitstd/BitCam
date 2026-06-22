@@ -4,7 +4,12 @@ import dev.nexbit.bitcam.common.BitCamPermissionExpressions;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
+import net.minecraft.commands.CommandSourceStack;
 import net.minecraft.server.level.ServerPlayer;
+//#if MC>=12111
+//$$ import net.minecraft.server.permissions.Permission;
+//$$ import net.minecraft.server.permissions.PermissionLevel;
+//#endif
 
 public final class BitCamServerHelper {
     private BitCamServerHelper() {}
@@ -42,9 +47,17 @@ public final class BitCamServerHelper {
 
         return BitCamPermissionExpressions.allows(
             permissionExpression,
-            level -> player.createCommandSourceStack().hasPermission(level),
+            level -> hasPermission(player.createCommandSourceStack(), level),
             ignored -> false
         );
+    }
+
+    private static boolean hasPermission(CommandSourceStack source, int level) {
+        //#if MC>=12111
+        //$$ return source.permissions().hasPermission(new Permission.HasCommandLevel(PermissionLevel.byId(level)));
+        //#else
+        return source.hasPermission(level);
+        //#endif
     }
 
     private static ServerPlayer findPlayer(List<ServerPlayer> players, UUID id) {
