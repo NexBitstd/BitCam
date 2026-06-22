@@ -39,7 +39,16 @@
 //$$ import org.lwjgl.glfw.GLFW;
 //$$
 //$$ public final class NeoForgeBitCamClientRuntime {
+    //#if MC>=12109
+//$$     private static final KeyMapping.Category KEY_CATEGORY = KeyMapping.Category.register(
+        //#if MC>=12111
+//$$         net.minecraft.resources.Identifier.fromNamespaceAndPath("bitcam", "main"));
+        //#else
+//$$         net.minecraft.resources.ResourceLocation.fromNamespaceAndPath("bitcam", "main"));
+        //#endif
+    //#else
 //$$     private static final String KEY_CATEGORY = "category.bitcam";
+    //#endif
 //$$     private static final String KEY_TOGGLE = "key.bitcam.toggle_stream";
 //$$     private static final String KEY_SETTINGS = "key.bitcam.open_settings";
 //$$
@@ -49,17 +58,7 @@
 //$$     private final KeyMapping settingsKey = createKeyMapping(KEY_SETTINGS, GLFW.GLFW_KEY_B);
 //$$
 //$$     private static KeyMapping createKeyMapping(String translationKey, int glfwKey) {
-        //#if MC>=12109
-//$$         return new KeyMapping(translationKey, InputConstants.Type.KEYSYM, glfwKey,
-//$$             net.minecraft.client.KeyMapping.Category.register(
-            //#if MC>=12111
-//$$                 net.minecraft.resources.Identifier.fromNamespaceAndPath("bitcam", "main")));
-            //#else
-//$$                 net.minecraft.resources.ResourceLocation.fromNamespaceAndPath("bitcam", "main")));
-            //#endif
-        //#else
 //$$         return new KeyMapping(translationKey, InputConstants.Type.KEYSYM, glfwKey, KEY_CATEGORY);
-        //#endif
 //$$     }
 //$$     private final BitCamClientSessionController sessionController;
 //$$     private final BitCamBillboardRenderer billboardRenderer;

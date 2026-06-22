@@ -141,10 +141,15 @@ if (isMainProject) {
 dependencies {
     add("minecraft", "com.mojang:minecraft:$compileMcVersion")
     if (isFabric) {
-        add("mappings", loom.officialMojangMappings())
-        add("modImplementation", "net.fabricmc:fabric-loader:${versionProperty("fabric_loader_version")}")
-        add("modImplementation", "net.fabricmc.fabric-api:fabric-api:${versionProperty("fabric_api_version")}")
-        add("modRuntimeOnly", "me.djtheredstoner:DevAuth-fabric:$devauthVersion")
+        // Unobfuscated MC (26.1+) uses NoRemap loom — no 'mappings'/'mod*' configurations exist there.
+        val modImpl = if (configurations.findByName("modImplementation") != null) "modImplementation" else "implementation"
+        val modRuntime = if (configurations.findByName("modRuntimeOnly") != null) "modRuntimeOnly" else "runtimeOnly"
+        if (configurations.findByName("mappings") != null) {
+            add("mappings", loom.officialMojangMappings())
+        }
+        add(modImpl, "net.fabricmc:fabric-loader:${versionProperty("fabric_loader_version")}")
+        add(modImpl, "net.fabricmc.fabric-api:fabric-api:${versionProperty("fabric_api_version")}")
+        add(modRuntime, "me.djtheredstoner:DevAuth-fabric:$devauthVersion")
     } else {
         if (configurations.findByName("mappings") != null) {
             add("mappings", loom.officialMojangMappings())

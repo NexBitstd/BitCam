@@ -19,7 +19,7 @@ public final class BitCamClientRenderCompat {
         //#if MC>=12105
         image.setPixelABGR(x, y, abgr);
         //#elseif MC>=12102
-        //$$ image.setPixel(x, y, abgr);
+        //$$ image.setPixel(x, y, abgrToArgb(abgr));
         //#else
         //$$ image.setPixelRGBA(x, y, abgr);
         //#endif
@@ -39,5 +39,13 @@ public final class BitCamClientRenderCompat {
         //#else
         //$$ return image.getPixelRGBA(x, y);
         //#endif
+    }
+
+    private static int abgrToArgb(int abgr) {
+        int alpha = (abgr >>> 24) & 0xFF;
+        int blue = (abgr >>> 16) & 0xFF;
+        int green = (abgr >>> 8) & 0xFF;
+        int red = abgr & 0xFF;
+        return (alpha << 24) | (red << 16) | (green << 8) | blue;
     }
 }

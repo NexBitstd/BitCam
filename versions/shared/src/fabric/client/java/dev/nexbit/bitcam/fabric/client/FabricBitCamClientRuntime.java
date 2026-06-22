@@ -14,14 +14,26 @@ import dev.nexbit.bitcam.fabric.network.FabricBitCamNetworking;
 import dev.nexbit.bitcam.fabric.platform.FabricPlatformAccess;
 import dev.nexbit.bitcam.fabric.render.FabricBitCamPlayerBubbleLayer;
 import dev.nexbit.bitcam.protocol.signal.ServerWelcomeSignalPacket;
+//#if MC>=260100
+//$$ import net.fabricmc.fabric.api.client.command.v2.ClientCommands;
+//#else
 import net.fabricmc.fabric.api.client.command.v2.ClientCommandManager;
+//#endif
 import net.fabricmc.fabric.api.client.command.v2.ClientCommandRegistrationCallback;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientLifecycleEvents;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
+//#if MC>=260100
+//$$ import net.fabricmc.fabric.api.client.keymapping.v1.KeyMappingHelper;
+//#else
 import net.fabricmc.fabric.api.client.keybinding.v1.KeyBindingHelper;
+//#endif
 import net.fabricmc.fabric.api.client.networking.v1.ClientPlayConnectionEvents;
 import net.fabricmc.fabric.api.client.networking.v1.ClientPlayNetworking;
+//#if MC>=260100
+//$$ import net.fabricmc.fabric.api.client.rendering.v1.LivingEntityRenderLayerRegistrationCallback;
+//#else
 import net.fabricmc.fabric.api.client.rendering.v1.LivingEntityFeatureRendererRegistrationCallback;
+//#endif
 import net.minecraft.client.KeyMapping;
 import net.minecraft.client.Minecraft;
 //#if MC>=12109
@@ -33,7 +45,16 @@ import net.minecraft.network.chat.Component;
 import org.lwjgl.glfw.GLFW;
 
 public final class FabricBitCamClientRuntime {
+    //#if MC>=12109
+    //$$ private static final KeyMapping.Category KEY_CATEGORY = KeyMapping.Category.register(
+        //#if MC>=12111
+    //$$     net.minecraft.resources.Identifier.fromNamespaceAndPath("bitcam", "main"));
+        //#else
+    //$$     net.minecraft.resources.ResourceLocation.fromNamespaceAndPath("bitcam", "main"));
+        //#endif
+    //#else
     private static final String KEY_CATEGORY = "category.bitcam";
+    //#endif
     private static final String KEY_TOGGLE = "key.bitcam.toggle_stream";
     private static final String KEY_SETTINGS = "key.bitcam.open_settings";
 
@@ -64,18 +85,17 @@ public final class FabricBitCamClientRuntime {
             this::sendHello
         );
         this.billboardRenderer = new BitCamBillboardRenderer(this.client, this.sessionController::coordinator);
+        //#if MC>=260100
+        //$$ this.toggleKey = KeyMappingHelper.registerKeyMapping(createKeyMapping(KEY_TOGGLE, GLFW.GLFW_KEY_V));
+        //$$ this.settingsKey = KeyMappingHelper.registerKeyMapping(createKeyMapping(KEY_SETTINGS, GLFW.GLFW_KEY_B));
+        //#else
         this.toggleKey = KeyBindingHelper.registerKeyBinding(createKeyMapping(KEY_TOGGLE, GLFW.GLFW_KEY_V));
         this.settingsKey = KeyBindingHelper.registerKeyBinding(createKeyMapping(KEY_SETTINGS, GLFW.GLFW_KEY_B));
+        //#endif
     }
 
     private static KeyMapping createKeyMapping(String translationKey, int glfwKey) {
-        //#if MC>=12109
-        //$$ return new KeyMapping(translationKey, InputConstants.Type.KEYSYM, glfwKey,
-        //$$     net.minecraft.client.KeyMapping.Category.register(
-        //$$         net.minecraft.resources.ResourceLocation.fromNamespaceAndPath("bitcam", "main")));
-        //#else
         return new KeyMapping(translationKey, InputConstants.Type.KEYSYM, glfwKey, KEY_CATEGORY);
-        //#endif
     }
 
     public void initialize() {
@@ -117,7 +137,11 @@ public final class FabricBitCamClientRuntime {
             this.sessionController.close();
             this.billboardRenderer.close();
         });
+        //#if MC>=260100
+        //$$ LivingEntityRenderLayerRegistrationCallback.EVENT.register((entityType, entityRenderer, registrationHelper, context) -> {
+        //#else
         LivingEntityFeatureRendererRegistrationCallback.EVENT.register((entityType, entityRenderer, registrationHelper, context) -> {
+        //#endif
             //#if MC>=12109
             //$$ if (entityRenderer instanceof AvatarRenderer playerRenderer) {
             //$$     registrationHelper.register(new FabricBitCamPlayerBubbleLayer(playerRenderer, this.billboardRenderer));
@@ -129,6 +153,26 @@ public final class FabricBitCamClientRuntime {
             //#endif
         });
         ClientCommandRegistrationCallback.EVENT.register((dispatcher, registryAccess) -> dispatcher.register(
+            //#if MC>=260100
+            //$$ ClientCommands.literal("bitcam")
+            //$$     .then(ClientCommands.literal("toggle").executes(context -> {
+            //$$         this.sessionController.toggleStreaming();
+            //$$         return 1;
+            //$$     }))
+            //$$     .then(ClientCommands.literal("cameras").executes(context -> {
+            //$$         this.sessionController.listCameras();
+            //$$         return 1;
+            //$$     }))
+            //$$     .then(ClientCommands.literal("settings").executes(context -> {
+            //$$         this.sessionController.openSettings();
+            //$$         return 1;
+            //$$     }))
+            //$$     .then(ClientCommands.literal("camera")
+            //$$         .then(ClientCommands.argument("index", IntegerArgumentType.integer(0)).executes(context -> {
+            //$$             this.sessionController.selectCamera(IntegerArgumentType.getInteger(context, "index"));
+            //$$             return 1;
+            //$$         })))
+            //#else
             ClientCommandManager.literal("bitcam")
                 .then(ClientCommandManager.literal("toggle").executes(context -> {
                     this.sessionController.toggleStreaming();
@@ -147,6 +191,7 @@ public final class FabricBitCamClientRuntime {
                         this.sessionController.selectCamera(IntegerArgumentType.getInteger(context, "index"));
                         return 1;
                     })))
+            //#endif
         ));
     }
 
@@ -159,7 +204,11 @@ public final class FabricBitCamClientRuntime {
 
     private void sendMessage(String message) {
         if (this.client.player != null) {
+            //#if MC>=260100
+            //$$ this.client.player.sendSystemMessage(Component.literal(message));
+            //#else
             this.client.player.displayClientMessage(Component.literal(message), false);
+            //#endif
         } else {
             this.platform.logger().info(message);
         }

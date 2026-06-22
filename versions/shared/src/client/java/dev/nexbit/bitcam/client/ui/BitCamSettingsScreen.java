@@ -170,12 +170,30 @@ public final class BitCamSettingsScreen extends Screen {
         }
     }
 
+    //#if MC<12106
+    //$$ @Override
+    //$$ public void renderBackground(GuiGraphics guiGraphics, int mouseX, int mouseY, float partialTick) {
+    //$$     // No-op: on <1.21.6 Screen.render() calls renderBackground() every frame. We invoke the real
+    //$$     // background exactly once from render() via super.renderBackground(...) to stop a double
+    //$$     // processBlurEffect (which double-blurs and re-darkens the backdrop + 3D player preview).
+    //$$ }
+    //#endif
+
     @Override
     //#if MC>=260100
     //$$ public void extractRenderState(net.minecraft.client.gui.GuiGraphicsExtractor guiGraphics, int mouseX, int mouseY, float partialTick) {
     //#else
     public void render(GuiGraphics guiGraphics, int mouseX, int mouseY, float partialTick) {
     //#endif
+        //#if MC>=260100
+        //$$ // Screen.extractRenderStateWithTooltipAndSubtitles() extracts the background before extractRenderState().
+        //#elseif MC>=12106
+        // Screen.renderWithTooltip() renders the background before render() on 1.21.6+.
+        //#else
+        //$$ // <1.21.6: super.render() below routes into Screen.render(), which calls renderBackground()
+        //$$ // again. We override renderBackground() to a no-op, so drive the real background once here.
+        //$$ super.renderBackground(guiGraphics, mouseX, mouseY, partialTick);
+        //#endif
         this.renderSceneBackdrop(guiGraphics, mouseX, mouseY);
         this.renderChromeBackdrop(guiGraphics);
         //#if MC>=260100
@@ -183,7 +201,18 @@ public final class BitCamSettingsScreen extends Screen {
         //#else
         super.render(guiGraphics, mouseX, mouseY, partialTick);
         //#endif
+        // Vanilla button 'message' text renders in a deferred font batch that bleeds over our icon
+        // overlays on the legacy 3D GUI (<1.21.6); lift the styled overlays onto a new layer.
+        //#if MC>=12106
+        guiGraphics.nextStratum();
+        //#else
+        //$$ guiGraphics.pose().pushPose();
+        //$$ guiGraphics.pose().translate(0.0F, 0.0F, 200.0F);
+        //#endif
         this.renderStyledWidgets(guiGraphics, mouseX, mouseY);
+        //#if MC<12106
+        //$$ guiGraphics.pose().popPose();
+        //#endif
         this.renderChromeForeground(guiGraphics);
     }
 
@@ -848,12 +877,6 @@ public final class BitCamSettingsScreen extends Screen {
         guiGraphics.fill(barX, TOP_BAR_Y + TOP_BAR_HEIGHT, barX + barWidth, TOP_BAR_Y + TOP_BAR_HEIGHT + 1, 0x804A5058);
         guiGraphics.fill(barX, TOP_BAR_Y + TOP_BAR_HEIGHT + 1, barX + barWidth, this.height - 24, this.activeTab == Tab.PLAYERS ? 0x60000000 : 0x18000000);
 
-        if (this.activeTab != Tab.PLAYERS) {
-            int columnLeft = this.settingsColumnLeft() - 18;
-            int columnRight = this.settingsColumnRight() + 18;
-            guiGraphics.fill(columnLeft, CONTENT_TOP - 12, columnRight, this.height - 46, 0x14000000);
-        }
-
         this.renderBrandLogo(guiGraphics);
     }
 
@@ -1007,6 +1030,13 @@ public final class BitCamSettingsScreen extends Screen {
         boolean canScrollUp = layout.scrollOffset() > 0;
         boolean canScrollDown = layout.scrollOffset() < this.openSelect.maxScrollOffset(layout.visibleRows());
 
+        // Lift the dropdown above sibling widgets so their deferred (font-batch) text doesn't bleed through.
+        //#if MC>=12106
+        guiGraphics.nextStratum();
+        //#else
+        //$$ guiGraphics.pose().pushPose();
+        //$$ guiGraphics.pose().translate(0.0F, 0.0F, 300.0F);
+        //#endif
         guiGraphics.fill(left - 2, top - 2, left + width + 2, top + height + 2, 0xA0000000);
         guiGraphics.fill(left - 1, top - 1, left + width + 1, top + height + 1, 0xFF5C646E);
         guiGraphics.fill(left, top, left + width, top + height, 0xE61A1D22);
@@ -1042,6 +1072,10 @@ public final class BitCamSettingsScreen extends Screen {
             guiGraphics.fill(left + width - 14, top + height - 12, left + width - 2, top + height - 2, 0x382A2F35);
             guiGraphics.drawCenteredString(this.font, Component.literal("v"), left + width - 8, top + height - 10, 0xFFC9D0D8);
         }
+
+        //#if MC<12106
+        //$$ guiGraphics.pose().popPose();
+        //#endif
     }
 
     private void drawSectionTitle(GuiGraphics guiGraphics, Component title, int y) {
@@ -1069,7 +1103,6 @@ public final class BitCamSettingsScreen extends Screen {
         BitCamBubbleStyle style = this.coordinator.bubbleStyle();
         guiGraphics.fill(previewAreaX, previewAreaY, previewAreaX + previewAreaWidth, previewAreaY + previewAreaHeight, 0x12000000);
         guiGraphics.fill(previewAreaX, previewAreaY, previewAreaX + previewAreaWidth, previewAreaY + Math.round(previewAreaHeight * 0.56F), 0x120B1014);
-        guiGraphics.drawString(this.font, Component.translatable("screen.bitcam.preview.title"), previewAreaX + 2, previewAreaY - 12, 0xC6CDD5, false);
 
         int actorInsetX = 12;
         int actorX = previewAreaX + actorInsetX;
@@ -1092,6 +1125,7 @@ public final class BitCamSettingsScreen extends Screen {
             //$$     guiGraphics, actorX, actorY, actorRight, actorBottom, modelSize, previewEntityYOffset, (float) mouseX, (float) mouseY, player
             //$$ );
             //#else
+            //FIXME(1.21.1-1.21.5): has problems with player model deph on render
             InventoryScreen.renderEntityInInventoryFollowsMouse(
                 guiGraphics,
                 actorX,
@@ -1115,25 +1149,6 @@ public final class BitCamSettingsScreen extends Screen {
             );
             return;
         }
-
-        int opacityLabelY = previewAreaY + previewAreaHeight - 12;
-        guiGraphics.drawString(
-            this.font,
-            this.ellipsize(
-                Component.translatable(
-                    "screen.bitcam.preview.meta",
-                    this.coordinator.bubbleStyle().preset().name(),
-                    this.coordinator.bubbleStyle().shape().name(),
-                    this.coordinator.bubbleStyle().renderMode().name(),
-                    this.coordinator.bubbleStyle().opacityPercent() + "%"
-                ),
-                previewAreaWidth
-            ),
-            previewAreaX,
-            opacityLabelY,
-            0x8F9AA7,
-            false
-        );
     }
 
     private int previewModelSize(

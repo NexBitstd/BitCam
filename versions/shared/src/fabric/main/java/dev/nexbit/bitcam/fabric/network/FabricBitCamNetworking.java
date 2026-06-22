@@ -14,8 +14,13 @@ public final class FabricBitCamNetworking {
             return;
         }
 
+        //#if MC>=260100
+        //$$ PayloadTypeRegistry.serverboundPlay().register(FabricBitCamControlPayload.TYPE, FabricBitCamControlPayload.CODEC);
+        //$$ PayloadTypeRegistry.clientboundPlay().register(FabricBitCamControlPayload.TYPE, FabricBitCamControlPayload.CODEC);
+        //#else
         PayloadTypeRegistry.playC2S().register(FabricBitCamControlPayload.TYPE, FabricBitCamControlPayload.CODEC);
         PayloadTypeRegistry.playS2C().register(FabricBitCamControlPayload.TYPE, FabricBitCamControlPayload.CODEC);
+        //#endif
         bootstrapped = true;
     }
 }
